@@ -148,13 +148,13 @@ Note, this is running Agent S3, our improved agent, without bBoN.
 Run Agent S3 with the required parameters:
 
 ```bash
-agent_s \
-    --provider openai \
-    --model gpt-5-2025-08-07 \
-    --ground_provider huggingface \
-    --ground_url http://localhost:8080 \
-    --ground_model ui-tars-1.5-7b \
-    --grounding_width 1920 \
+agent_s 
+    --provider openai 
+    --model gpt-5-2025-08-07 
+    --ground_provider huggingface 
+    --ground_url http://localhost:8080 
+    --ground_model ui-tars-1.5-7b 
+    --grounding_width 1920 
     --grounding_height 1080
 ```
 

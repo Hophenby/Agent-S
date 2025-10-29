@@ -3,7 +3,7 @@ import logging
 import textwrap
 from typing import Dict, List, Tuple
 
-from gui_agents.s3.agents.grounding import ACI
+from agents.grounding import ACI, LegacyACI
 from gui_agents.s3.core.module import BaseModule
 from gui_agents.s3.memory.procedural_memory import PROCEDURAL_MEMORY
 from gui_agents.s3.utils.common_utils import (
@@ -25,7 +25,7 @@ class Worker(BaseModule):
     def __init__(
         self,
         worker_engine_params: Dict,
-        grounding_agent: ACI,
+        grounding_agent: ACI = None,
         platform: str = "ubuntu",
         max_trajectory_length: int = 8,
         enable_reflection: bool = True,
@@ -53,7 +53,11 @@ class Worker(BaseModule):
             "claude-3-7-sonnet-20250219",
             "claude-sonnet-4-5-20250929",
         ]
-        self.grounding_agent = grounding_agent
+        # If no grounding_agent provided, default to LegacyACI
+        if grounding_agent is None:
+            self.grounding_agent: LegacyACI = LegacyACI()
+        else:
+            self.grounding_agent: LegacyACI = grounding_agent
         self.max_trajectory_length = max_trajectory_length
         self.enable_reflection = enable_reflection
 
@@ -182,10 +186,10 @@ class Worker(BaseModule):
         """
 
         self.grounding_agent.assign_screenshot(obs)
-        self.grounding_agent.set_task_instruction(instruction)
+        # self.grounding_agent.set_task_instruction(instruction)
 
         generator_message = (
-            ""
+            "The screen after the last action is provided. It has marked the location of the last action taken."
             if self.turn_count > 0
             else "The initial screen is provided. No action has been taken yet."
         )
@@ -365,6 +369,34 @@ class Worker(BaseModule):
         try:
             assert plan_code, "Plan code should not be empty"
             exec_code = create_pyautogui_code(self.grounding_agent, plan_code, obs)
+            # If the grounding agent produced structured feedback (LegacyACI),
+            # create_pyautogui_code sets agent.last_action_feedback to that dict.
+            # Feed the annotated feedback image + annotation back into the
+            # generator_agent context so the next planning step can use it.
+            try:
+                fb = getattr(self.grounding_agent, "last_action_feedback", None)
+                if fb and isinstance(fb, dict):
+                    annotation = fb.get("annotation", "")
+                    img_b64 = fb.get("feedback_image_base64")
+                    # Add as a user message (environment feedback) with image
+                    self.generator_agent.add_message(
+                        text_content=(f"ENV FEEDBACK: {annotation}" if annotation else "ENV FEEDBACK"),
+                        image_content=img_b64,
+                        role="user",
+                    )
+                    # Also add to reflection agent if available so reflection can see it
+                    if getattr(self, "reflection_agent", None):
+                        try:
+                            self.reflection_agent.add_message(
+                                text_content=(f"ENV FEEDBACK: {annotation}" if annotation else "ENV FEEDBACK"),
+                                image_content=img_b64,
+                                role="user",
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                # best-effort: don't break main flow on feedback attachment failure
+                pass
         except Exception as e:
             logger.error(
                 f"Could not evaluate the following plan code:\n{plan_code}\nError: {e}"

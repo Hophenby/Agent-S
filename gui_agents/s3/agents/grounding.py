@@ -1,21 +1,28 @@
 import re
 from collections import defaultdict
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytesseract
 from PIL import Image
 from pytesseract import Output
+import cv2
+import numpy as np
+import base64
+from io import BytesIO
 
-from gui_agents.s3.memory.procedural_memory import PROCEDURAL_MEMORY
-from gui_agents.s3.core.mllm import LMMAgent
-from gui_agents.s3.utils.common_utils import call_llm_safe
-from gui_agents.s3.agents.code_agent import CodeAgent
+from memory.procedural_memory import PROCEDURAL_MEMORY
+from core.mllm import LMMAgent
+from utils.common_utils import call_llm_safe
+from agents.code_agent import CodeAgent
 import logging
 
 logger = logging.getLogger("desktopenv.agent")
 
+feedback_renderer: Optional[Callable[[Image.Image], bytes]] = None
 
+def get_feedback_renderer() -> Optional[Callable[[Image.Image], bytes]]:
+    return feedback_renderer
 class ACI:
     def __init__(self):
         self.notes: List[str] = []
@@ -350,12 +357,24 @@ class OSWorldACI(ACI):
         button_type: str = "left",
         hold_keys: List = [],
     ):
-        """Click on the element
-        Args:
-            element_description:str, a detailed descriptions of which element to click on. This description should be at least a full sentence.
-            num_clicks:int, number of times to click the element
-            button_type:str, which mouse button to press can be "left", "middle", or "right"
-            hold_keys:List, list of keys to hold while clicking
+        """MCP 接口：根据元素描述执行点击（使用 grounding 模型生成坐标）。
+
+        名称: OSWorldACI.click
+
+        参数:
+            element_description (str): 必需，对目标元素的自然语言描述（完整句子）。
+            num_clicks (int): 可选，点击次数，默认 1。
+            button_type (str): 可选，'left'|'middle'|'right'，默认 'left'。
+            hold_keys (list): 可选，点击时需要按住的修饰按键列表。
+
+        返回:
+            str: 返回可执行的 pyautogui 命令字符串（由上层执行器决定是否执行）。
+
+        错误:
+            ValueError: 当 grounding 未能生成有效坐标时抛出。
+
+        示例:
+            {"method":"OSWorldACI.click","params":{"element_description":"点击搜索框"}}
         """
         coords1 = self.generate_coords(element_description, self.obs)
         x, y = self.resize_coordinates(coords1)
@@ -372,9 +391,18 @@ class OSWorldACI(ACI):
 
     @agent_action
     def switch_applications(self, app_code):
-        """Switch to a different application that is already open
-        Args:
-            app_code:str the code name of the application to switch to from the provided list of open applications
+        """MCP 接口：切换到已经打开的应用程序（平台相关实现）。
+
+        名称: OSWorldACI.switch_applications
+
+        参数:
+            app_code (str): 必需，目标应用的标识或名称（例如窗口标题或注册名称）。
+
+        返回:
+            str: 返回用于执行切换的命令字符串（平台相关）。
+
+        错误:
+            AssertionError: 当 platform 不被支持时抛出。
         """
         if self.platform == "darwin":
             return f"import pyautogui; import time; pyautogui.hotkey('command', 'space', interval=0.5); pyautogui.typewrite({repr(app_code)}); pyautogui.press('enter'); time.sleep(1.0)"
@@ -389,9 +417,18 @@ class OSWorldACI(ACI):
 
     @agent_action
     def open(self, app_or_filename: str):
-        """Open any application or file with name app_or_filename. Use this action to open applications or files on the desktop, do not open manually.
-        Args:
-            app_or_filename:str, the name of the application or filename to open
+        """MCP 接口：打开指定应用或文件。
+
+        名称: OSWorldACI.open
+
+        参数:
+            app_or_filename (str): 必需，应用名或文件名，用于在桌面环境中打开目标。
+
+        返回:
+            str: 返回执行打开操作的命令字符串（平台相关）。
+
+        错误:
+            AssertionError: 当 platform 不支持时抛出。
         """
         if self.platform == "linux":
             return f"import pyautogui; pyautogui.hotkey('win'); time.sleep(0.5); pyautogui.write({repr(app_or_filename)}); time.sleep(1.0); pyautogui.hotkey('enter'); time.sleep(0.5)"
@@ -417,12 +454,21 @@ class OSWorldACI(ACI):
         overwrite: bool = False,
         enter: bool = False,
     ):
-        """Type text/unicode into a specific element
-        Args:
-            element_description:str, a detailed description of which element to enter text in. This description should be at least a full sentence.
-            text:str, the text to type
-            overwrite:bool, Assign it to True if the text should overwrite the existing text, otherwise assign it to False. Using this argument clears all text in an element.
-            enter:bool, Assign it to True if the enter key should be pressed after typing the text, otherwise assign it to False.
+        """MCP 接口：在指定元素中输入文本（可选先定位并点击元素）。
+
+        名称: OSWorldACI.type
+
+        参数:
+            element_description (str|None): 可选，对目标元素的自然语言描述；若提供将先定位并点击。
+            text (str): 要输入的文本（支持 Unicode）。
+            overwrite (bool): 是否先清空元素再输入（True/False）。
+            enter (bool): 是否在输入完成后按回车键。
+
+        返回:
+            str: 返回用于执行输入的命令字符串（pyautogui 或 clipboard 方法）。
+
+        示例:
+            {"method":"OSWorldACI.type","params":{"element_description":"搜索框","text":"hello","enter":true}}
         """
         command = "import pyautogui; "
         command += (
@@ -463,9 +509,15 @@ class OSWorldACI(ACI):
 
     @agent_action
     def save_to_knowledge(self, text: List[str]):
-        """Save facts, elements, texts, etc. to a long-term knowledge bank for reuse during this task. Can be used for copy-pasting text, saving elements, etc.
-        Args:
-            text:List[str] the text to save to the knowledge
+        """MCP 接口：将若干文本保存到长期知识库以便任务期间重用（如复制粘贴、元素记忆）。
+
+        名称: OSWorldACI.save_to_knowledge
+
+        参数:
+            text (List[str]): 必需，要保存的文本列表。
+
+        返回:
+            str: 返回 WAIT（占位），表示已记录内容供后续使用。
         """
         self.notes.extend(text)
         return """WAIT"""
@@ -474,11 +526,20 @@ class OSWorldACI(ACI):
     def drag_and_drop(
         self, starting_description: str, ending_description: str, hold_keys: List = []
     ):
-        """Drag from the starting description to the ending description
-        Args:
-            starting_description:str, a very detailed description of where to start the drag action. This description should be at least a full sentence.
-            ending_description:str, a very detailed description of where to end the drag action. This description should be at least a full sentence.
-            hold_keys:List list of keys to hold while dragging
+        """MCP 接口：根据起始/结束描述执行拖拽操作（使用 grounding 模型生成坐标）。
+
+        名称: OSWorldACI.drag_and_drop
+
+        参数:
+            starting_description (str): 必需，起始元素的自然语言描述。
+            ending_description (str): 必需，结束元素的自然语言描述。
+            hold_keys (List): 可选，拖拽过程中需要按住的修饰键。
+
+        返回:
+            str: 返回用于执行拖拽的 pyautogui 命令字符串。
+
+        错误:
+            ValueError: grounding 过程中若无法定位到元素会抛出错误。
         """
         coords1 = self.generate_coords(starting_description, self.obs)
         coords2 = self.generate_coords(ending_description, self.obs)
@@ -503,11 +564,17 @@ class OSWorldACI(ACI):
     def highlight_text_span(
         self, starting_phrase: str, ending_phrase: str, button: str = "left"
     ):
-        """Highlight a text span between a provided starting phrase and ending phrase. Use this to highlight words, lines, and paragraphs.
-        Args:
-            starting_phrase:str, the phrase that denotes the start of the text span you want to highlight. If you only want to highlight one word, just pass in that single word.
-            ending_phrase:str, the phrase that denotes the end of the text span you want to highlight. If you only want to highlight one word, just pass in that single word.
-            button:str, the button to use to highlight the text span. Defaults to "left". Can be "left", "right", or "middle".
+        """MCP 接口：根据起始/结束短语高亮文本段（用于词、行或段落）。
+
+        名称: OSWorldACI.highlight_text_span
+
+        参数:
+            starting_phrase (str): 必需，标记高亮开始位置的短语。
+            ending_phrase (str): 必需，标记高亮结束位置的短语。
+            button (str): 可选，使用的鼠标按钮，'left'|'right'|'middle'，默认 'left'。
+
+        返回:
+            str: pyautogui 命令字符串，用于执行移动与拖拽完成高亮。
         """
         coords1 = self.generate_text_coords(
             starting_phrase, self.obs, alignment="start"
@@ -527,12 +594,17 @@ class OSWorldACI(ACI):
     def set_cell_values(
         self, cell_values: Dict[str, Any], app_name: str, sheet_name: str
     ):
-        """Use this to set individual cell values in a spreadsheet. For example, setting A2 to "hello" would be done by passing {"A2": "hello"} as cell_values. The sheet must be opened before this command can be used.
-        Args:
-            cell_values: Dict[str, Any], A dictionary of cell values to set in the spreadsheet. The keys are the cell coordinates in the format "A1", "B2", etc.
-                Supported value types include: float, int, string, bool, formulas.
-            app_name: str, The name of the spreadsheet application. For example, "Some_sheet.xlsx".
-            sheet_name: str, The name of the sheet in the spreadsheet. For example, "Sheet1".
+        """MCP 接口：在表格应用中设置若干单元格的值（通过 CodeAgent 执行，返回的是动态生成的脚本）。
+
+        名称: OSWorldACI.set_cell_values
+
+        参数:
+            cell_values (Dict[str, Any]): 必需，键为单元格坐标（如 "A1"），值为要设置的内容（支持数值/字符串/公式/布尔）。
+            app_name (str): 必需，目标表格应用窗口/文档名称。
+            sheet_name (str): 必需，要操作的工作表名称。
+
+        返回:
+            str: 返回一段会在目标环境中运行的脚本（LibreOffice UNO 操作），用于实际设置单元格。
         """
         return SET_CELL_VALUES_CMD.format(
             cell_values=cell_values, app_name=app_name, sheet_name=sheet_name
@@ -540,24 +612,23 @@ class OSWorldACI(ACI):
 
     @agent_action
     def call_code_agent(self, task: str = None):
-        """Call the code agent to execute code for tasks or subtasks that can be completed solely with coding.
+        """MCP 接口：调用 CodeAgent 来执行仅靠代码即可完成的子任务或特定任务。
 
-        Args:
-            task: str, the task or subtask to execute. If None, uses the current full task instruction.
+        名称: OSWorldACI.call_code_agent
 
-        **🚨 CRITICAL GUIDELINES:**
-        - **ONLY pass a task parameter for SPECIFIC subtasks** (e.g., "Calculate sum of column B", "Filter data by date")
-        - **NEVER pass a task parameter for full tasks** - let it default to the original task instruction
-        - **NEVER rephrase or modify the original task** - this prevents hallucination corruption
-        - **If unsure, omit the task parameter entirely** to use the original task instruction
+        参数:
+            task (str|None): 可选。若为 None，则使用当前任务指令（self.current_task_instruction）；
+                若为字符串，则表示要执行的明确子任务（仅在确知为子任务时使用）。
 
-        Use this for tasks that can be fully accomplished through code execution, particularly for:
-        - Spreadsheet applications (LibreOffice Calc, Excel): data processing, filtering, sorting, calculations, formulas, data analysis
-        - Document editors (LibreOffice Writer, Word): text processing, content editing, formatting, document manipulation
-        - Code editors (VS Code, text editors): code editing, file processing, text manipulation, configuration
-        - Data analysis tools: statistical analysis, data transformation, reporting
-        - File management: bulk operations, file processing, content extraction
-        - System utilities: configuration, setup, automation
+        返回:
+            str: 返回执行器可运行的脚本/命令字符串（或 WAIT 占位），同时 CodeAgent 的执行结果会被存入 self.last_code_agent_result。
+
+        注意 (重要):
+            - 仅当 task 为明确子任务时传入 task 参数；不要为完整任务传入 task（以免造成 hallucination）。
+            - 如果不确定，请传 None，让系统使用当前任务指令。
+
+        示例:
+            {"method":"OSWorldACI.call_code_agent","params":{"task":"Calculate sum of column B"}}
         """
         logger.info("=" * 50)
         logger.info("GROUNDING AGENT: Calling Code Agent")
@@ -603,11 +674,17 @@ class OSWorldACI(ACI):
 
     @agent_action
     def scroll(self, element_description: str, clicks: int, shift: bool = False):
-        """Scroll the element in the specified direction
-        Args:
-            element_description:str, a very detailed description of which element to enter scroll in. This description should be at least a full sentence.
-            clicks:int, the number of clicks to scroll can be positive (up) or negative (down).
-            shift:bool, whether to use shift+scroll for horizontal scrolling
+        """MCP 接口：对指定元素执行滚轮滚动（使用 grounding 模型定位元素）。
+
+        名称: OSWorldACI.scroll
+
+        参数:
+            element_description (str): 必需，对目标元素的自然语言描述。
+            clicks (int): 必需，滚动步数（正/负表示方向）。
+            shift (bool): 可选，若为 True 则使用水平滚动（shift+滚轮），否则垂直滚动。
+
+        返回:
+            str: 返回执行滚动的命令字符串（pyautogui）。
         """
         coords1 = self.generate_coords(element_description, self.obs)
         x, y = self.resize_coordinates(coords1)
@@ -619,9 +696,15 @@ class OSWorldACI(ACI):
 
     @agent_action
     def hotkey(self, keys: List):
-        """Press a hotkey combination
-        Args:
-            keys:List the keys to press in combination in a list format (e.g. ['ctrl', 'c'])
+        """MCP 接口：按下组合键。
+
+        名称: OSWorldACI.hotkey
+
+        参数:
+            keys (List[str]): 必需，表示要按下的键序列，例如 ['ctrl','c']。
+
+        返回:
+            str: 返回可执行的 pyautogui.hotkey 命令字符串。
         """
         # add quotes around the keys
         keys = [f"'{key}'" for key in keys]
@@ -629,10 +712,16 @@ class OSWorldACI(ACI):
 
     @agent_action
     def hold_and_press(self, hold_keys: List, press_keys: List):
-        """Hold a list of keys and press a list of keys
-        Args:
-            hold_keys:List, list of keys to hold
-            press_keys:List, list of keys to press in a sequence
+        """MCP 接口：按住一组按键后顺序按下另一组按键。
+
+        名称: OSWorldACI.hold_and_press
+
+        参数:
+            hold_keys (List[str]): 必需，要按住的按键列表。
+            press_keys (List[str]): 必需，要依次按下的按键列表。
+
+        返回:
+            str: 返回用于在环境中执行的 pyautogui 命令字符串。
         """
 
         press_keys_str = "[" + ", ".join([f"'{key}'" for key in press_keys]) + "]"
@@ -664,3 +753,426 @@ class OSWorldACI(ACI):
     def fail(self):
         """End the current task with a failure. Use this when you believe the entire task is impossible to complete."""
         return """FAIL"""
+
+
+class LegacyACI(ACI):
+    def __init__(self, width: int = 1920, height: int = 1080):
+        super().__init__()
+        # default screen size (can be overridden)
+        self.width = width
+        self.height = height
+        # last operation info for feedback drawing
+        self._last_op = None
+        # assignable screenshot (raw bytes or PIL image)
+        self.obs = None
+
+    def assign_screenshot(self, obs: Dict):
+        """MCP 接口：分配当前截图（供后续操作和反馈绘制使用）。
+
+        名称: LegacyACI.assign_screenshot
+
+        参数:
+            obs (dict): 必需，包含键 'screenshot' 的字典。screenshot 支持以下格式：
+                - base64 编码的 JPEG/PNG 字符串
+                - 原始 image bytes
+                - PIL.Image 对象
+                - numpy.ndarray
+
+        返回:
+            dict: {"result": "OK"}（在本地实现中将直接设置并无复杂返回值）
+
+        错误:
+            ValueError: 当提供的图片无法解析时可抛出 invalid_image 错误（调用者可捕获并处理）。
+
+        示例:
+            agent.assign_screenshot({"screenshot": "<base64-string>"})
+        """
+        self.obs = obs
+
+    def _to_abs_point(self, rel):
+        """Convert relative coordinate or bbox to absolute point (x,y).
+        Accepts:
+          - point: (x_rel, y_rel) in [0,1]
+          - bbox: (x_rel, y_rel, w_rel, h_rel) where x_rel,y_rel are top-left
+        Returns (x,y) integers in pixels.
+        """
+        if rel is None:
+            return None
+        if len(rel) == 2:
+            x = int(round(rel[0] * self.width))
+            y = int(round(rel[1] * self.height))
+            return x, y
+        elif len(rel) >= 4:
+            x = int(round((rel[0] + rel[2] / 2.0) * self.width))
+            y = int(round((rel[1] + rel[3] / 2.0) * self.height))
+            return x, y
+        else:
+            raise ValueError("Relative coordinate must be len 2 or >=4")
+
+    def _to_abs_bbox(self, rel):
+        """Convert relative bbox (x,y,w,h) to absolute bbox in pixels: (x1,y1,x2,y2)"""
+        if rel is None:
+            return None
+        if len(rel) >= 4:
+            x1 = int(round(rel[0] * self.width))
+            y1 = int(round(rel[1] * self.height))
+            w = int(round(rel[2] * self.width))
+            h = int(round(rel[3] * self.height))
+            x2 = x1 + w
+            y2 = y1 + h
+            return x1, y1, x2, y2
+        return None
+
+    def _load_image_as_bgr(self):
+        """Load screenshot from self.obs into a BGR numpy array for cv2 drawing.
+        Returns a copy of the image sized to (height,width).
+        """
+        if not self.obs:
+            # blank canvas
+            img = np.zeros((self.height, self.width, 3), dtype=np.uint8) + 255
+            return img
+
+        screenshot = self.obs.get("screenshot") if isinstance(self.obs, dict) else self.obs
+        # if base64 string
+        if isinstance(screenshot, str):
+            try:
+                b = base64.b64decode(screenshot)
+            except Exception:
+                b = screenshot.encode()
+            screenshot = b
+
+        # if bytes
+        if isinstance(screenshot, (bytes, bytearray)):
+            pil = Image.open(BytesIO(screenshot)).convert("RGB")
+            arr = np.array(pil)
+            # PIL gives RGB, convert to BGR
+            img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        elif isinstance(screenshot, Image.Image):
+            arr = np.array(screenshot.convert("RGB"))
+            img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        elif isinstance(screenshot, np.ndarray):
+            img = screenshot.copy()
+            # If RGB, convert to BGR heuristically
+            if img.shape[2] == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        else:
+            img = np.zeros((self.height, self.width, 3), dtype=np.uint8) + 255
+
+        # Resize/crop/pad to target dims
+        img_h, img_w = img.shape[:2]
+        if (img_w, img_h) != (self.width, self.height):
+            img = cv2.resize(img, (self.width, self.height))
+        return img
+
+    def _encode_img_to_b64(self, img_bgr) -> str:
+        _, buf = cv2.imencode('.jpg', img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        return base64.b64encode(buf.tobytes()).decode()
+
+    def _draw_feedback(self, coords_rel=None, bbox_rel=None, text: str = '') -> str:
+        """Draw the last operation (point or bbox) and annotation text on the screenshot and return base64 jpg string."""
+        img = self._load_image_as_bgr()
+        # draw bbox if provided
+        if bbox_rel is not None:
+            bb = self._to_abs_bbox(bbox_rel)
+            if bb:
+                x1, y1, x2, y2 = bb
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                cv2.putText(img, text, (x1, max(20, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        elif coords_rel is not None:
+            x, y = self._to_abs_point(coords_rel)
+            cv2.circle(img, (x, y), 12, (0, 0, 255), -1)
+            cv2.putText(img, text, (max(10, x - 10), max(20, y - 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        else:
+            cv2.putText(img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 128, 0), 2)
+
+        return self._encode_img_to_b64(img)
+
+    def _wrap_result(self, result: Any, coords_rel=None, bbox_rel=None, text: str = '') -> Dict:
+        """Return a dict containing the execution result, a base64-encoded feedback image, and annotation text."""
+        global feedback_renderer
+        img_b64 = self._draw_feedback(coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
+
+        # Publish a renderer callable to the module-level `feedback_renderer` so external
+        # callers (e.g., cli_app) can render this same annotation on arbitrary screenshots.
+        def _renderer(screenshot_input) -> Image.Image:
+            """Render the same feedback (coords_rel/bbox_rel/text) onto the provided screenshot.
+
+            Accepts PIL.Image, raw bytes, numpy array, or dict{'screenshot': ...}.
+            Returns a PIL.Image with the annotation drawn.
+            """
+
+            # Use the instance helper to generate JPEG bytes with annotation
+            try:
+                jpeg_bytes = self.draw_feedback_bytes(screenshot_input, coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
+                return jpeg_bytes
+            except Exception:
+                # Fallback: attempt to draw by temporarily setting obs and using _load_image_as_bgr/_draw_feedback
+                prev_obs = getattr(self, "obs", None)
+                try:
+                    if isinstance(screenshot_input, dict):
+                        self.obs = screenshot_input
+                    else:
+                        self.obs = {"screenshot": screenshot_input}
+                    b64 = self._draw_feedback(coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
+                    return BytesIO(base64.b64decode(b64)).getvalue()
+                finally:
+                    try:
+                        self.obs = prev_obs
+                    except Exception:
+                        self.obs = None
+
+        # assign to module-level variable so cli_app can import and call it
+        try:
+            feedback_renderer = _renderer
+            print("Assigned feedback_renderer callable for external use.")
+        except Exception:
+            pass
+
+        return {
+            "result": result,
+            "feedback_image_base64": img_b64,
+            "annotation": text,
+        }
+
+    # Public helpers to render feedback on an arbitrary screenshot (no side-effects)
+    def draw_feedback_b64(self, screenshot_input, coords_rel=None, bbox_rel=None, text: str = "") -> str:
+        """Render feedback (circle/bbox + text) on a given screenshot and return a base64 JPEG string.
+
+        Args:
+            screenshot_input: one of the supported screenshot formats (bytes, PIL.Image, numpy.ndarray, or a dict {'screenshot': ...}).
+            coords_rel: optional relative point (x_rel,y_rel) in [0,1]
+            bbox_rel: optional relative bbox (x,y,w,h) in [0,1]
+            text: annotation text to draw near the operation
+
+        Returns:
+            base64-encoded JPEG string of the annotated image.
+
+        Notes:
+            - This method temporarily sets `self.obs` to the provided screenshot for rendering and restores the previous value on return.
+            - It does not change any other state (best-effort).
+        """
+        prev_obs = getattr(self, "obs", None)
+        try:
+            # Accept either raw image payload or a wrapped dict
+            if isinstance(screenshot_input, dict):
+                self.obs = screenshot_input
+            else:
+                self.obs = {"screenshot": screenshot_input}
+
+            return self._draw_feedback(coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
+        finally:
+            # restore previous obs
+            try:
+                self.obs = prev_obs
+            except Exception:
+                self.obs = None
+
+    def draw_feedback_bytes(self, screenshot_input, coords_rel=None, bbox_rel=None, text: str = "") -> bytes:
+        """Render feedback and return raw JPEG bytes.
+
+        Convenience wrapper that decodes the base64 string produced by draw_feedback_b64.
+        """
+        b64 = self.draw_feedback_b64(screenshot_input, coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
+        return base64.b64decode(b64)
+
+    # Common actions using relative coordinates (values in [0,1])
+    @agent_action
+    def click(self, rel_point: Tuple[float, float], num_clicks: int = 1, button_type: str = "left"):
+        """MCP 接口：在相对坐标点执行点击。
+
+        名称: LegacyACI.click
+
+        参数:
+            rel_point (tuple[float, float]): 必需，相对坐标 [x_rel, y_rel]，范围 0.0-1.0。
+            num_clicks (int): 可选，点击次数，默认 1。
+            button_type (str): 可选，按钮类型，'left'|'middle'|'right'，默认 'left'
+
+        返回:
+            dict: 包含以下字段的字典：
+                - result (str): 可执行命令字符串（例如 pyautogui 调用）。
+                - feedback_image_base64 (str): base64 编码的 JPEG，图像上标注了点击点和文本注释。
+                - annotation (str): 简短文本描述，例如 "Clicked at (960,540)"。
+
+        错误:
+            ValueError: 当 rel_point 坐标不在 [0,1] 范围内时可抛出 invalid_coordinate。
+
+        示例请求 (JSON-RPC):
+            {"method": "LegacyACI.click", "params": {"rel_point": [0.5,0.5], "num_clicks": 1}}
+        """
+        x_abs, y_abs = self._to_abs_point(rel_point)
+        cmd = f"import pyautogui; pyautogui.click({x_abs}, {y_abs}, clicks={num_clicks}, button={repr(button_type)})"
+        text = f"clicked here last time"
+        return self._wrap_result(cmd, coords_rel=rel_point, text=text)
+
+    @agent_action
+    def drag_and_drop(self, rel_start: Tuple[float, float], rel_end: Tuple[float, float], duration: float = 1.0):
+        """MCP 接口：从起始相对点拖拽到结束相对点。
+
+        名称: LegacyACI.drag_and_drop
+
+        参数:
+            rel_start (tuple[float,float]): 必需，起始相对坐标 [x_rel,y_rel]。
+            rel_end (tuple[float,float]): 必需，结束相对坐标 [x_rel,y_rel]。
+            duration (float): 可选，拖拽时长（秒），默认 1.0。
+
+        返回:
+            dict: {result, feedback_image_base64, annotation}，其中 feedback_image_base64 的图像会绘制覆盖拖拽区域的矩形。
+
+        错误:
+            ValueError: 当坐标不在 [0,1] 范围内时抛出 invalid_coordinate。
+
+        示例:
+            {"method":"LegacyACI.drag_and_drop","params":{"rel_start":[0.2,0.2],"rel_end":[0.8,0.5]}}
+        """
+        x1, y1 = self._to_abs_point(rel_start)
+        x2, y2 = self._to_abs_point(rel_end)
+        cmd = f"import pyautogui; pyautogui.moveTo({x1},{y1}); pyautogui.dragTo({x2},{y2}, duration={duration}, button='left'); pyautogui.mouseUp()"
+        text = f"Dragged from ({x1},{y1}) to ({x2},{y2})"
+        # create bbox covering the drag line
+        bbox_rel = (min(rel_start[0], rel_end[0]), min(rel_start[1], rel_end[1]), abs(rel_end[0]-rel_start[0]), abs(rel_end[1]-rel_start[1]))
+        return self._wrap_result(cmd, bbox_rel=bbox_rel, text=text)
+
+    @agent_action
+    def type(self, rel_point: Optional[Tuple[float, float]] = None, text_to_type: str = "", enter: bool = False):
+        """MCP 接口：在可选相对位置点击后输入文本，并可选择回车。
+
+        名称: LegacyACI.type
+
+        参数:
+            rel_point (tuple|None): 可选，相对坐标点；若提供会先点击该点。
+            text_to_type (str): 要输入的文本（可包含 Unicode）。
+            enter (bool): 是否在输入后按回车。
+
+        返回:
+            dict: 包含 result（命令字符串）、feedback_image_base64（标注点击点）和 annotation（已输入文本的简短描述）。
+
+        示例:
+            {"method":"LegacyACI.type","params":{"rel_point":[0.5,0.5],"text_to_type":"Hello","enter":true}}
+        """
+        cmd = "import pyautogui; "
+        if rel_point is not None:
+            x, y = self._to_abs_point(rel_point)
+            cmd += f"pyautogui.click({x},{y}); "
+        # naive handling for unicode: use clipboard approach would complicate; keep simple
+        cmd += f"pyautogui.write({repr(text_to_type)}); "
+        if enter:
+            cmd += "pyautogui.press('enter'); "
+        ann = f"Typed text: {text_to_type[:80]}"
+        return self._wrap_result(cmd, coords_rel=rel_point, text=ann)
+
+    @agent_action
+    def scroll(self, rel_point: Tuple[float, float], clicks: int, horizontal: bool = False):
+        """MCP 接口：在相对坐标处执行滚轮滚动。
+
+        名称: LegacyACI.scroll
+
+        参数:
+            rel_point (tuple[float,float]): 必需，相对坐标点。
+            clicks (int): 必需，滚动步数。正数/负数表示方向（依平台约定）。
+            horizontal (bool): 可选，是否水平滚动，默认为 False（垂直）。
+
+        返回:
+            dict: 包含 result（命令字符串）、feedback_image_base64（标注滚动点）和 annotation（描述）。
+        """
+        x, y = self._to_abs_point(rel_point)
+        if horizontal:
+            cmd = f"import pyautogui; pyautogui.moveTo({x},{y}); pyautogui.hscroll({clicks})"
+        else:
+            cmd = f"import pyautogui; pyautogui.moveTo({x},{y}); pyautogui.vscroll({clicks})"
+        ann = f"Scrolled at ({x},{y}) by {clicks}"
+        return self._wrap_result(cmd, coords_rel=rel_point, text=ann)
+
+    @agent_action
+    def hotkey(self, keys: List[str]):
+        """MCP 接口：按下组合键。
+
+        名称: LegacyACI.hotkey
+
+        参数:
+            keys (list[str]): 必需，表示按键序列，例如 ["ctrl","c"]。
+
+        返回:
+            dict: {result, feedback_image_base64, annotation}。annotation 示例: "Hotkey pressed: ctrl+c"。
+
+        示例:
+            {"method":"LegacyACI.hotkey","params":{"keys":["ctrl","s"]}}
+        """
+        keys_quoted = [f"'{k}'" for k in keys]
+        cmd = f"import pyautogui; pyautogui.hotkey({', '.join(keys_quoted)})"
+        ann = f"Hotkey pressed: {'+'.join(keys)}"
+        return self._wrap_result(cmd, text=ann)
+
+    @agent_action
+    def wait(self, seconds: float):
+        """MCP 接口：等待指定秒数。
+
+        名称: LegacyACI.wait
+
+        参数:
+            seconds (float): 必需，等待时长（秒），必须 >= 0。
+
+        返回:
+            dict: {result, feedback_image_base64, annotation}。
+        """
+        cmd = f"import time; time.sleep({seconds})"
+        ann = f"Waited for {seconds} seconds"
+        return self._wrap_result(cmd, text=ann)
+
+    @agent_action
+    def switch_applications(self, app_code: str):
+        """MCP 接口：按名称切换到已有应用（占位实现）。
+
+        名称: LegacyACI.switch_applications
+
+        参数:
+            app_code (str): 必需，目标应用的标识或名称。
+
+        返回:
+            dict: {result, feedback_image_base64, annotation}。result 为占位命令字符串，annotation 为简短描述。
+        """
+        # best-effort: no coordinate used, return simple annotation
+        cmd = f"# switch_applications placeholder for {app_code}"
+        ann = f"Switch to app: {app_code}"
+        return self._wrap_result(cmd, text=ann)
+
+    @agent_action
+    def open(self, app_or_filename: str):
+        """MCP 接口：打开应用或文件（占位）。
+
+        名称: LegacyACI.open
+
+        参数:
+            app_or_filename (str): 必需，应用名或文件名。
+
+        返回:
+            dict: {result, feedback_image_base64, annotation}。
+        """
+        cmd = f"# open placeholder for {app_or_filename}"
+        ann = f"Open: {app_or_filename}"
+        return self._wrap_result(cmd, text=ann)
+
+    @agent_action
+    def done(self):
+        """MCP 接口：标记任务完成（成功）。
+
+        名称: LegacyACI.done
+
+        参数: 无
+
+        返回:
+            dict: {result: "DONE", feedback_image_base64, annotation}
+        """
+        return self._wrap_result("DONE", text="Task completed")
+
+    @agent_action
+    def fail(self):
+        """MCP 接口：标记任务失败。
+
+        名称: LegacyACI.fail
+
+        参数: 无
+
+        返回:
+            dict: {result: "FAIL", feedback_image_base64, annotation}
+        """
+        return self._wrap_result("FAIL", text="Task failed")

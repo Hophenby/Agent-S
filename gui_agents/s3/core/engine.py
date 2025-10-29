@@ -8,13 +8,20 @@ from openai import (
     APIError,
     AzureOpenAI,
     OpenAI,
-    RateLimitError,
+    RateLimitError, 
+    DefaultHttpxClient
 )
 
 
 class LMMEngine:
     pass
 
+HTTP_CLIENT = None
+# use client with proxy support
+PROXY = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
+if PROXY:
+
+    HTTP_CLIENT = DefaultHttpxClient(proxy=PROXY)
 
 class LMMEngineOpenAI(LMMEngine):
     def __init__(
@@ -45,13 +52,18 @@ class LMMEngineOpenAI(LMMEngine):
             raise ValueError(
                 "An API Key needs to be provided in either the api_key parameter or as an environment variable named OPENAI_API_KEY"
             )
-        organization = self.organization or os.getenv("OPENAI_ORG_ID")
+        # organization = self.organization or os.getenv("OPENAI_ORG_ID")
         if not self.llm_client:
             if not self.base_url:
-                self.llm_client = OpenAI(api_key=api_key, organization=organization)
+                self.llm_client = OpenAI(api_key=api_key, 
+                                        #  organization=organization, 
+                                         http_client=HTTP_CLIENT)
             else:
                 self.llm_client = OpenAI(
-                    base_url=self.base_url, api_key=api_key, organization=organization
+                    base_url=self.base_url, 
+                    api_key=api_key, 
+                    # organization=organization, 
+                    http_client=HTTP_CLIENT
                 )
         return (
             self.llm_client.chat.completions.create(
@@ -387,11 +399,13 @@ class LMMEngineHuggingFace(LMMEngine):
             raise ValueError(
                 "HuggingFace endpoint must be provided as base_url parameter or as an environment variable named HF_ENDPOINT_URL."
             )
+        # print(messages)
         if not self.llm_client:
-            self.llm_client = OpenAI(base_url=base_url, api_key=api_key)
+            self.llm_client = OpenAI(base_url=base_url, api_key=api_key, 
+                    http_client=HTTP_CLIENT)
         return (
             self.llm_client.chat.completions.create(
-                model="tgi",
+                model="ByteDance-Seed/UI-TARS-1.5-7B",
                 messages=messages,
                 max_tokens=max_new_tokens if max_new_tokens else 4096,
                 temperature=temperature,

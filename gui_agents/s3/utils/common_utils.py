@@ -27,9 +27,28 @@ def create_pyautogui_code(agent, code: str, obs: Dict) -> str:
     Raises:
         Exception: If there is an error in evaluating the code.
     """
+    # Prepare agent and clear any previous action feedback
+    try:
+        agent.last_action_feedback = None
+    except Exception:
+        pass
     agent.assign_screenshot(obs)  # Necessary for grounding
-    exec_code = eval(code)
-    return exec_code
+
+    # Evaluate the code. Agent action methods (LegacyACI) may return a dict:
+    #   {"result": <exec_code_or_status>, "feedback_image_base64": ..., "annotation": ...}
+    exec_result = eval(code)
+
+    # If an agent returned a structured dict, store it on the agent for callers
+    # and return the executable code string (or the original result if not a dict).
+    if isinstance(exec_result, dict) and "result" in exec_result:
+        try:
+            agent.last_action_feedback = exec_result
+        except Exception:
+            # best-effort: ignore if agent cannot hold attribute
+            pass
+        return exec_result["result"]
+
+    return exec_result
 
 
 def call_llm_safe(

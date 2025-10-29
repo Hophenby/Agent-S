@@ -11,15 +11,20 @@ import time
 
 from PIL import Image
 
-from gui_agents.s3.agents.grounding import OSWorldACI
-from gui_agents.s3.agents.agent_s import AgentS3
-from gui_agents.s3.utils.local_env import LocalEnv
+from agents.agent_s import AgentS3
+from agents.grounding import LegacyACI, get_feedback_renderer
+from utils.local_env import LocalEnv
 
 current_platform = platform.system().lower()
 
 # Global flag to track pause state for debugging
 paused = False
 
+os.makedirs("logs", exist_ok=True)
+
+timestamp = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
+os.makedirs("logs/" + timestamp, exist_ok=True)
+runtime_log_path = os.path.join("logs", timestamp)
 
 def get_char():
     """Get a single character from stdin without pressing Enter"""
@@ -151,28 +156,78 @@ def scale_screen_dimensions(width: int, height: int, max_dim_size: int):
     safe_height = int(height * scale_factor)
     return safe_width, safe_height
 
-
-def run_agent(agent, instruction: str, scaled_width: int, scaled_height: int):
-    global paused
-    obs = {}
-    traj = "Task:\n" + instruction
-    subtask_traj = ""
-    for step in range(15):
-        # Check if we're in paused state and wait
-        while paused:
-            time.sleep(0.1)
-        # Get screen shot using pyautogui
+def screenshot(scaled_width: int, scaled_height: int) ->bytes:
         screenshot = pyautogui.screenshot()
+
+        # Resize for target dimensions
         screenshot = screenshot.resize((scaled_width, scaled_height), Image.LANCZOS)
+
+        # Flatten alpha to white background if needed, then ensure RGB
+        if screenshot.mode == "RGBA":
+            bg = Image.new("RGB", screenshot.size, (255, 255, 255))
+            bg.paste(screenshot, mask=screenshot.split()[3])
+            screenshot = bg
+        elif screenshot.mode != "RGB":
+            screenshot = screenshot.convert("RGB")
+
+        # Reduce color palette to significantly cut PNG size while keeping readability.
+        # 128 colors is a good balance; reduce further (e.g., 64) if more compression is needed.
+        try:
+            screenshot = screenshot.quantize(colors=128, method=Image.MEDIANCUT)
+        except Exception:
+            # Fallback: leave image as-is if quantization fails
+            pass
 
         # Save the screenshot to a BytesIO object
         buffered = io.BytesIO()
         screenshot.save(buffered, format="PNG")
 
         # Get the byte value of the screenshot
-        screenshot_bytes = buffered.getvalue()
-        # Convert to base64 string.
+        return buffered.getvalue()
+
+
+def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height: int):
+    """Run the agent for up to 15 steps, feeding screenshots and handling feedback images.
+
+    This replaces the live screenshot with an annotated feedback image when the
+    grounding agent provides one. It keeps the previous behavior otherwise.
+    """
+    global paused
+    obs = {}
+    # next_screenshot_bytes = None
+    traj = "Task:\n" + instruction
+    subtask_traj = ""
+    fb_note = ""
+
+    for step in range(15):
+        # Check if we're in paused state and wait
+        while paused:
+            time.sleep(0.1)
+
+        # Get screen shot using pyautogui (or use previously-rendered annotated screenshot)
+        # screenshot_bytes = screenshot(scaled_width, scaled_height) if next_screenshot_bytes is None else next_screenshot_bytes
+
+        if callable(get_feedback_renderer()):
+            try:
+                screenshot_bytes = get_feedback_renderer()(screenshot(scaled_width, scaled_height))
+                print("🖼️  Using annotated feedback screenshot from grounding agent.")
+            except Exception:
+                screenshot_bytes = screenshot(scaled_width, scaled_height)
+        else:
+            print("🖼️  Using regular screenshot (no feedback annotation).")
+            screenshot_bytes = screenshot(scaled_width, scaled_height)
+
+        print(f"\n📸 Captured screenshot of size: {len(screenshot_bytes) / 1024:.2f} KB")
+
+        # Prepare observation
         obs["screenshot"] = screenshot_bytes
+
+        with open(
+            os.path.join(runtime_log_path, f"step_{step + 1}_screenshot.png"), "wb"
+        ) as f:
+            f.write(screenshot_bytes)
+        
+        print(f"📝 Current Trajectory:\n{traj}\n")
 
         # Check again for pause state before prediction
         while paused:
@@ -183,7 +238,64 @@ def run_agent(agent, instruction: str, scaled_width: int, scaled_height: int):
         # Get next action code from the agent
         info, code = agent.predict(instruction=instruction, observation=obs)
 
-        if "done" in code[0].lower() or "fail" in code[0].lower():
+        # Normalize the returned action(s) to a list
+        actions = code
+        if isinstance(actions, dict):
+            actions = [actions]
+        if not isinstance(actions, list) or len(actions) == 0:
+            print("⚠️  No code returned by agent, stopping execution.")
+            break
+
+        # Extract the first action and normalize to an executable string.
+        first_action = actions[0]
+        exec_str = None
+
+        # LegacyACI may return a structured dict: {"result": <exec_code_or_status>, "feedback_image_base64":..., "annotation":...}
+        if isinstance(first_action, dict):
+            exec_str = first_action.get("result")
+            # Save or display feedback image/annotation if present
+            # fb_b64 = first_action.get("feedback_image_base64")
+            fb_note = first_action.get("annotation")
+            # if fb_b64:
+            #     try:
+            #         # Prefer using the module-level feedback_renderer to render the same
+            #         # annotation onto the most-recent screenshot, so the generator sees
+            #         # the annotated image as the next observation.
+            #         annotated_bytes = None
+            #         if callable(feedback_renderer):
+            #             try:
+            #                 annotated_bytes = feedback_renderer(screenshot(scaled_width, scaled_height))
+            #             except Exception:
+            #                 annotated_bytes = None
+
+            #         # Fallback: use the base64 payload provided by the agent
+            #         if annotated_bytes is None:
+            #             import base64
+
+            #             annotated_bytes = base64.b64decode(fb_b64)
+
+            #         # Save annotated image and set it as next screenshot to feed into the
+            #         # next planning iteration.
+            #         ts = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
+            #         fb_path = os.path.join("logs", f"feedback_{ts}.jpg")
+            #         with open(fb_path, "wb") as f:
+            #             f.write(annotated_bytes)
+            #         next_screenshot_bytes = annotated_bytes
+            #         print(f"🔎 Feedback image saved to: {fb_path}")
+            if fb_note:
+                print(f"🔖 Feedback annotation: {fb_note}")
+            #     except Exception as e:
+            #         print(f"Could not save feedback image: {e}")
+        else:
+            exec_str = first_action
+            fb_note = ""
+
+        print(f"📝 Agent returned action code:\n{exec_str}\n")
+        if exec_str is None or (isinstance(exec_str, str) and exec_str.strip() == ""):
+            print("⚠️  No code returned by agent, stopping execution.")
+            break
+
+        if isinstance(exec_str, str) and ("done" in exec_str.lower() or "fail" in exec_str.lower()):
             if platform.system() == "Darwin":
                 os.system(
                     f'osascript -e \'display dialog "Task Completed" with title "OpenACI Agent" buttons "OK" default button "OK"\''
@@ -195,34 +307,34 @@ def run_agent(agent, instruction: str, scaled_width: int, scaled_height: int):
 
             break
 
-        if "next" in code[0].lower():
+        if isinstance(exec_str, str) and "next" in exec_str.lower():
             continue
 
-        if "wait" in code[0].lower():
+        if isinstance(exec_str, str) and "wait" in exec_str.lower():
             print("⏳ Agent requested wait...")
             time.sleep(5)
             continue
 
-        else:
-            time.sleep(1.0)
-            print("EXECUTING CODE:", code[0])
+        # Otherwise execute the code
+        time.sleep(1.0)
+        print("EXECUTING CODE:", exec_str)
 
-            # Check for pause state before execution
-            while paused:
-                time.sleep(0.1)
+        # Check for pause state before execution
+        while paused:
+            time.sleep(0.1)
 
-            # Ask for permission before executing
-            exec(code[0])
-            time.sleep(1.0)
+        # Ask for permission before executing
+        exec(exec_str)
+        time.sleep(1.0)
 
-            # Update task and subtask trajectories
-            if "reflection" in info and "executor_plan" in info:
-                traj += (
-                    "\n\nReflection:\n"
-                    + str(info["reflection"])
-                    + "\n\n----------------------\n\nPlan:\n"
-                    + info["executor_plan"]
-                )
+        # Update task and subtask trajectories
+        if "reflection" in info and "executor_plan" in info:
+            traj += (
+                "\n\nReflection:\n"
+                + str(info["reflection"])
+                + "\n\n----------------------\n\nPlan:\n"
+                + info["executor_plan"]
+            )
 
 
 def main():
@@ -320,10 +432,10 @@ def main():
 
     # Re-scales screenshot size to ensure it fits in UI-TARS context limit
     screen_width, screen_height = pyautogui.size()
-    scaled_width, scaled_height = scale_screen_dimensions(
-        screen_width, screen_height, max_dim_size=2400
-    )
-
+    # scaled_width, scaled_height = scale_screen_dimensions(
+    #     screen_width, screen_height, max_dim_size=2400
+    # )
+    scaled_width, scaled_height = args.grounding_width, args.grounding_height 
     # Load the general engine params
     engine_params = {
         "engine_type": args.provider,
@@ -334,14 +446,14 @@ def main():
     }
 
     # Load the grounding engine from a custom endpoint
-    engine_params_for_grounding = {
-        "engine_type": args.ground_provider,
-        "model": args.ground_model,
-        "base_url": args.ground_url,
-        "api_key": args.ground_api_key,
-        "grounding_width": args.grounding_width,
-        "grounding_height": args.grounding_height,
-    }
+    # engine_params_for_grounding = {
+    #     "engine_type": args.ground_provider,
+    #     "model": args.ground_model,
+    #     "base_url": args.ground_url,
+    #     "api_key": args.ground_api_key,
+    #     "grounding_width": args.grounding_width,
+    #     "grounding_height": args.grounding_height,
+    # }
 
     # Initialize environment based on user preference
     local_env = None
@@ -351,12 +463,12 @@ def main():
         )
         local_env = LocalEnv()
 
-    grounding_agent = OSWorldACI(
-        env=local_env,
-        platform=current_platform,
-        engine_params_for_generation=engine_params,
-        engine_params_for_grounding=engine_params_for_grounding,
-        width=screen_width,
+    grounding_agent = LegacyACI(
+        # env=local_env,
+        # platform=current_platform,
+        # engine_params_for_generation=engine_params,
+        # engine_params_for_grounding=engine_params_for_grounding,
+        width=scaled_width,
         height=screen_height,
     )
 
@@ -370,11 +482,13 @@ def main():
 
     while True:
         query = input("Query: ")
+        print("Delaying for 2 seconds before starting the agent...")
+        time.sleep(2.0)
 
         agent.reset()
 
         # Run the agent on your own device
-        run_agent(agent, query, scaled_width, scaled_height)
+        run_agent(agent, query, args.grounding_width, args.grounding_height)
 
         response = input("Would you like to provide another query? (y/n): ")
         if response.lower() != "y":
