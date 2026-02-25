@@ -1,0 +1,37 @@
+{
+  "window": {
+    "hwnd": 69708,
+    "rect": {
+      "height": 1390,
+      "width": 2582,
+      "x": -11,
+      "y": -11
+    },
+    "title": "test.enl"
+  },
+  "annotations": [
+    {
+      "name": "Reference",
+      "x": 78,
+      "y": 49,
+      "width": 68,
+      "height": 8,
+      "relative_rect": {
+        "x": 0.03046875,
+        "y": 0.03553299492385787,
+        "width": 0.0265625,
+        "height": 0.005801305293691081
+      },
+      "margins": {
+        "left_px": 78,
+        "top_px": 49,
+        "right_px": 2414,
+        "bottom_px": 1322,
+        "left_rel": 0.03046875,
+        "top_rel": 0.03553299492385787,
+        "right_rel": 0.94296875,
+        "bottom_rel": 0.9586656997824511
+      }
+    }
+  ]
+}

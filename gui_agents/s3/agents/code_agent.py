@@ -1,9 +1,9 @@
 import logging
 from typing import Dict, List, Tuple, Optional
 
-from gui_agents.s3.memory.procedural_memory import PROCEDURAL_MEMORY
-from gui_agents.s3.utils.common_utils import call_llm_safe, split_thinking_response
-from gui_agents.s3.core.mllm import LMMAgent
+from memory.procedural_memory import PROCEDURAL_MEMORY
+from utils.common_utils import call_llm_safe, split_thinking_response
+from core.mllm import LMMAgent
 
 logger = logging.getLogger("desktopenv.agent")
 

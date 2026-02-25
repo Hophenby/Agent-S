@@ -9,10 +9,11 @@ import signal
 import sys
 import time
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from agents.agent_s import AgentS3
 from agents.grounding import LegacyACI, get_feedback_renderer
+from utils.common_utils import RUNTIME_LOG_PATH
 from utils.local_env import LocalEnv
 
 current_platform = platform.system().lower()
@@ -20,11 +21,6 @@ current_platform = platform.system().lower()
 # Global flag to track pause state for debugging
 paused = False
 
-os.makedirs("logs", exist_ok=True)
-
-timestamp = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
-os.makedirs("logs/" + timestamp, exist_ok=True)
-runtime_log_path = os.path.join("logs", timestamp)
 
 def get_char():
     """Get a single character from stdin without pressing Enter"""
@@ -186,18 +182,28 @@ def screenshot(scaled_width: int, scaled_height: int) ->bytes:
         return buffered.getvalue()
 
 
+
 def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height: int):
     """Run the agent for up to 15 steps, feeding screenshots and handling feedback images.
 
     This replaces the live screenshot with an annotated feedback image when the
     grounding agent provides one. It keeps the previous behavior otherwise.
+    
+    Args:
+        agent: The AgentS3 instance
+        instruction: The task instruction
+        scaled_width: Screenshot width
+        scaled_height: Screenshot height
+        bbox_annotation_path: Optional path to bounding box annotation JSON file
     """
     global paused
     obs = {}
-    # next_screenshot_bytes = None
     traj = "Task:\n" + instruction
     subtask_traj = ""
     fb_note = ""
+
+    bbox_annotation_data = None
+    enhanced_instruction = instruction
 
     for step in range(15):
         # Check if we're in paused state and wait
@@ -221,9 +227,19 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
 
         # Prepare observation
         obs["screenshot"] = screenshot_bytes
-
+        original_byteio = io.BytesIO()
+        pyautogui.screenshot().save(original_byteio, format="PNG")
+        obs["original_screenshot"] = original_byteio.getvalue()
+        
+        # Add bounding box annotations to observation if available
+        if bbox_annotation_data:
+            obs["ui_annotations"] = bbox_annotation_data
+            obs["ui_element_names"] = [
+                ann.get("name") for ann in bbox_annotation_data.get("annotations", [])
+            ]
+        
         with open(
-            os.path.join(runtime_log_path, f"step_{step + 1}_screenshot.png"), "wb"
+            os.path.join(RUNTIME_LOG_PATH, f"step_{step + 1}_screenshot.png"), "wb"
         ) as f:
             f.write(screenshot_bytes)
         
@@ -235,8 +251,8 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
 
         print(f"\n🔄 Step {step + 1}/15: Getting next action from agent...")
 
-        # Get next action code from the agent
-        info, code = agent.predict(instruction=instruction, observation=obs)
+        # Get next action code from the agent with enhanced instruction
+        info, code = agent.predict(instruction=enhanced_instruction, observation=obs)
 
         # Normalize the returned action(s) to a list
         actions = code
@@ -253,39 +269,9 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
         # LegacyACI may return a structured dict: {"result": <exec_code_or_status>, "feedback_image_base64":..., "annotation":...}
         if isinstance(first_action, dict):
             exec_str = first_action.get("result")
-            # Save or display feedback image/annotation if present
-            # fb_b64 = first_action.get("feedback_image_base64")
             fb_note = first_action.get("annotation")
-            # if fb_b64:
-            #     try:
-            #         # Prefer using the module-level feedback_renderer to render the same
-            #         # annotation onto the most-recent screenshot, so the generator sees
-            #         # the annotated image as the next observation.
-            #         annotated_bytes = None
-            #         if callable(feedback_renderer):
-            #             try:
-            #                 annotated_bytes = feedback_renderer(screenshot(scaled_width, scaled_height))
-            #             except Exception:
-            #                 annotated_bytes = None
-
-            #         # Fallback: use the base64 payload provided by the agent
-            #         if annotated_bytes is None:
-            #             import base64
-
-            #             annotated_bytes = base64.b64decode(fb_b64)
-
-            #         # Save annotated image and set it as next screenshot to feed into the
-            #         # next planning iteration.
-            #         ts = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
-            #         fb_path = os.path.join("logs", f"feedback_{ts}.jpg")
-            #         with open(fb_path, "wb") as f:
-            #             f.write(annotated_bytes)
-            #         next_screenshot_bytes = annotated_bytes
-            #         print(f"🔎 Feedback image saved to: {fb_path}")
             if fb_note:
                 print(f"🔖 Feedback annotation: {fb_note}")
-            #     except Exception as e:
-            #         print(f"Could not save feedback image: {e}")
         else:
             exec_str = first_action
             fb_note = ""
@@ -427,6 +413,12 @@ def main():
         default=False,
         help="Enable local coding environment for code execution (WARNING: Executes arbitrary code locally)",
     )
+    parser.add_argument(
+        "--instruction_markdown_path",
+        type=str,
+        default="",
+        help="Path to the markdown file containing task instructions.",
+    )
 
     args = parser.parse_args()
 
@@ -478,6 +470,7 @@ def main():
         platform=current_platform,
         max_trajectory_length=args.max_trajectory_length,
         enable_reflection=args.enable_reflection,
+        instruction_markdown_path=args.instruction_markdown_path,
     )
 
     while True:

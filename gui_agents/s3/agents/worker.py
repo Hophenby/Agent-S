@@ -1,19 +1,22 @@
 from functools import partial
 import logging
+import os
 import textwrap
 from typing import Dict, List, Tuple
 
 from agents.grounding import ACI, LegacyACI
-from gui_agents.s3.core.module import BaseModule
-from gui_agents.s3.memory.procedural_memory import PROCEDURAL_MEMORY
-from gui_agents.s3.utils.common_utils import (
+from core.module import BaseModule
+from core.mllm import LMMAgent
+from agents.instruction_reader import InstructionReader, process_generation_result
+from memory.procedural_memory import PROCEDURAL_MEMORY
+from utils.common_utils import (
     call_llm_safe,
     call_llm_formatted,
     parse_code_from_string,
     split_thinking_response,
     create_pyautogui_code,
 )
-from gui_agents.s3.utils.formatters import (
+from utils.formatters import (
     SINGLE_ACTION_FORMATTER,
     CODE_VALID_FORMATTER,
 )
@@ -22,6 +25,10 @@ logger = logging.getLogger("desktopenv.agent")
 
 
 class Worker(BaseModule):
+    grounding_agent: LegacyACI
+    generator_agent: LMMAgent
+    reflection_agent: LMMAgent
+    instruction_agent: InstructionReader
     def __init__(
         self,
         worker_engine_params: Dict,
@@ -29,6 +36,7 @@ class Worker(BaseModule):
         platform: str = "ubuntu",
         max_trajectory_length: int = 8,
         enable_reflection: bool = True,
+        instruction_markdown_path: str = "",
     ):
         """
         Worker receives the main task and generates actions, without the need of hierarchical planning
@@ -60,6 +68,8 @@ class Worker(BaseModule):
             self.grounding_agent: LegacyACI = grounding_agent
         self.max_trajectory_length = max_trajectory_length
         self.enable_reflection = enable_reflection
+        self.instruction_markdown_path = instruction_markdown_path
+        self.has_instruction_markdown = False
 
         self.reset()
 
@@ -76,13 +86,33 @@ class Worker(BaseModule):
             skipped_actions.append("call_code_agent")
 
         sys_prompt = PROCEDURAL_MEMORY.construct_simple_worker_procedural_memory(
-            type(self.grounding_agent), skipped_actions=skipped_actions
+            type(self.grounding_agent), 
+            skipped_actions=skipped_actions, 
+            guidelines=PROCEDURAL_MEMORY.TASK_DESCRIPTION_GUIDELINES, 
+            formatting_instructions=PROCEDURAL_MEMORY.RESPONSE_FORMAT_PROMPT
         ).replace("CURRENT_OS", self.platform)
 
         self.generator_agent = self._create_agent(sys_prompt)
         self.reflection_agent = self._create_agent(
             PROCEDURAL_MEMORY.REFLECTION_ON_TRAJECTORY
         )
+        if (os.path.isfile(self.instruction_markdown_path)):
+            self.instruction_agent = InstructionReader(
+                llm_client=self._create_agent(),
+                temperature=self.temperature,
+                use_thinking=self.use_thinking,
+            )
+            self.instruction_agent.load_instruction_from_markdown(
+                self.instruction_markdown_path
+            )
+            self.has_instruction_markdown = True
+        else:
+            self.instruction_agent = InstructionReader(
+                llm_client=self._create_agent(),
+                temperature=self.temperature,
+                use_thinking=self.use_thinking,
+            )
+            self.has_instruction_markdown = False
 
         self.turn_count = 0
         self.worker_history = []
@@ -343,6 +373,18 @@ class Worker(BaseModule):
 
             # Reset the code agent result after adding it to context
             self.grounding_agent.last_code_agent_result = None
+
+        if self.has_instruction_markdown:
+            instruction_reader_response, executed_codes = self.instruction_agent.run_generation(
+                observation=obs,
+                instruction=instruction,
+                generator_message=generator_message,
+            )
+            print("instruction_reader: Executed Codes:", executed_codes)
+
+            instruction_reader_response = process_generation_result(obs, instruction_reader_response)
+            if (instruction_reader_response.get("match_box") is not None):
+                generator_message += f"用户已经在软件的使用说明书中找到了下一步需要操作的区域，对应的区域位置为: {instruction_reader_response.get('match_box')}"
 
         # Finalize the generator message
         self.generator_agent.add_message(

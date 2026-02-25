@@ -12,8 +12,28 @@ class PROCEDURAL_MEMORY:
     )
 
     @staticmethod
-    def construct_simple_worker_procedural_memory(agent_class, skipped_actions):
-        procedural_memory = textwrap.dedent(
+    def construct_simple_worker_procedural_memory(agent_class, skipped_actions, guidelines: str, formatting_instructions: str):
+        procedural_memory = guidelines
+
+        for attr_name in dir(agent_class):
+            if attr_name in skipped_actions:
+                continue
+
+            attr = getattr(agent_class, attr_name)
+            if callable(attr) and hasattr(attr, "is_agent_action"):
+                # Use inspect to get the full function signature
+                signature = inspect.signature(attr)
+                procedural_memory += f"""
+    def {attr_name}{signature}:
+    '''{attr.__doc__}'''
+        """
+
+        procedural_memory += formatting_instructions
+
+        return procedural_memory.strip()
+    
+
+    TASK_DESCRIPTION_GUIDELINES =  textwrap.dedent(
             f"""\
         You are an expert in graphical user interfaces and Python code. You are responsible for executing the task: `TASK_DESCRIPTION`.
         You are working in CURRENT_OS.
@@ -63,21 +83,9 @@ class PROCEDURAL_MEMORY:
         class Agent:
         """
         )
+    
 
-        for attr_name in dir(agent_class):
-            if attr_name in skipped_actions:
-                continue
-
-            attr = getattr(agent_class, attr_name)
-            if callable(attr) and hasattr(attr, "is_agent_action"):
-                # Use inspect to get the full function signature
-                signature = inspect.signature(attr)
-                procedural_memory += f"""
-    def {attr_name}{signature}:
-    '''{attr.__doc__}'''
-        """
-
-        procedural_memory += textwrap.dedent(
+    RESPONSE_FORMAT_PROMPT = textwrap.dedent(
             """
         Your response should be formatted like this:
         (Previous action verification)
@@ -108,8 +116,6 @@ class PROCEDURAL_MEMORY:
         11. Prefer hotkeys and application features over clicking on text elements when possible. Highlighting text is fine.
         """
         )
-
-        return procedural_memory.strip()
 
     # For reflection agent, post-action verification mainly for cycle detection
     REFLECTION_ON_TRAJECTORY = textwrap.dedent(

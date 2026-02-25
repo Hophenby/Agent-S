@@ -1,6 +1,6 @@
 """This file contains various formatting checks used to reprompt an agent for correctly formatted responses."""
 
-from common_utils import (
+from utils.common_utils import (
     extract_agent_functions,
     parse_code_from_string,
     create_pyautogui_code,
@@ -24,7 +24,9 @@ def _attempt_code_creation(agent, code, obs):
     try:
         return create_pyautogui_code(agent, code, obs)
     except Exception as e:
-        return None
+        stacktrace = e.__traceback__
+        print(f"Code creation failed with error: {e}, stacktrace: {stacktrace}")
+        raise e
 
 
 code_valid_check = (

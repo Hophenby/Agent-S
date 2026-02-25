@@ -1,18 +1,25 @@
+import datetime
+import os
 import re
 import time
 from io import BytesIO
 from PIL import Image
 
-from typing import Tuple, Dict
+from typing import Optional, Tuple, Dict
 
-from gui_agents.s3.memory.procedural_memory import PROCEDURAL_MEMORY
+from memory.procedural_memory import PROCEDURAL_MEMORY
 
 import logging
 
 logger = logging.getLogger("desktopenv.agent")
 
+os.makedirs("logs", exist_ok=True)
 
-def create_pyautogui_code(agent, code: str, obs: Dict) -> str:
+timestamp = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
+os.makedirs("logs/" + timestamp, exist_ok=True)
+RUNTIME_LOG_PATH = os.path.join("logs", timestamp)
+
+def create_pyautogui_code(agent, code: str, obs: Optional[Dict]) -> str:
     """
     Attempts to evaluate the code into a pyautogui code snippet with grounded actions using the observation screenshot.
 
@@ -27,12 +34,13 @@ def create_pyautogui_code(agent, code: str, obs: Dict) -> str:
     Raises:
         Exception: If there is an error in evaluating the code.
     """
-    # Prepare agent and clear any previous action feedback
-    try:
-        agent.last_action_feedback = None
-    except Exception:
-        pass
-    agent.assign_screenshot(obs)  # Necessary for grounding
+    if obs is not None:
+        # Prepare agent and clear any previous action feedback
+        try:
+            agent.last_action_feedback = None
+        except Exception:
+            pass
+        agent.assign_screenshot(obs)  # Necessary for grounding
 
     # Evaluate the code. Agent action methods (LegacyACI) may return a dict:
     #   {"result": <exec_code_or_status>, "feedback_image_base64": ..., "annotation": ...}
@@ -40,7 +48,9 @@ def create_pyautogui_code(agent, code: str, obs: Dict) -> str:
 
     # If an agent returned a structured dict, store it on the agent for callers
     # and return the executable code string (or the original result if not a dict).
-    if isinstance(exec_result, dict) and "result" in exec_result:
+    if (obs is not None and
+        isinstance(exec_result, dict) and 
+        "result" in exec_result):
         try:
             agent.last_action_feedback = exec_result
         except Exception:

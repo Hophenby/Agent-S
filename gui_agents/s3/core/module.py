@@ -1,5 +1,5 @@
 from typing import Dict, Optional
-from mllm import LMMAgent
+from core.mllm import LMMAgent
 
 
 class BaseModule:

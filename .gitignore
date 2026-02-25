@@ -162,3 +162,4 @@ cython_debug/
 #.idea/
 logs/
 .DS_Store
+gui_agents/s3/agents/markdown
