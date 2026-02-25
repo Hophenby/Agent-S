@@ -1,0 +1,133 @@
+name: "EndNote FindFullText Instruction"
+metadata:
+  title: "EndNote 使用指南：FindFullText 功能入门"
+  software:
+    name: "EndNote"
+    version: "2024"
+  language: "zh-CN"
+  source_markdown: "./example_instruction.md"
+  author: null
+  updated_at: null
+
+on:
+  workflow_dispatch:
+
+jobs:
+  instruction_flow:
+    name: "FindFullText 操作流程"
+    runs-on: "human-desktop"
+    steps:
+      - id: step_1_open_app
+        name: "步骤1：打开文件"
+        description: "打开 EndNote 软件，进入主界面。"
+        action:
+          - "双击桌面上的 EndNote 图标"
+          - "或者通过开始菜单搜索并打开 EndNote"
+        actions: null
+        images:
+          step_image: null
+          result_image: "./test_images/step1.png"
+        element_text: null
+        expected_result: "进入 EndNote 主界面"
+        timeout_sec: 120
+        retry: 0
+
+      - id: step_2_click_references
+        name: "步骤2：点击References菜单"
+        description: "在顶部菜单栏中点击 References。"
+        action:
+          - "点击顶部菜单栏中的 References"
+        actions:
+          mouse_input:
+            - button: "left"
+              action: "click"
+              clicks: 1
+              duration_ms: 0
+              position: null
+              target: "References 菜单"
+              modifiers: []
+          key_input: []
+          text_input: []
+          scroll_input: []
+          drag_drop: []
+          hover_input: []
+          window_input: []
+          file_input: []
+          clipboard_input: []
+          wait: []
+          special: []
+        images:
+          step_image: "./test_images/step2.png"
+          result_image: "./test_images/step2_r.png"
+        element_text: "References"
+        expected_result: "References 下拉菜单出现"
+        timeout_sec: 120
+        retry: 0
+
+      - id: step_3_find_full_text
+        name: "步骤3：在下拉菜单中选择 Find Full Text"
+        description: "在 References 下拉菜单中选择 Find Full Text。"
+        action:
+          - "在下拉菜单中点击 Find Full Text"
+          - "在子菜单中再次选择 Find Full Text"
+        actions:
+          mouse_input:
+            - button: "left"
+              action: "click"
+              clicks: 1
+              duration_ms: 0
+              position: null
+              target: "Find Full Text 菜单项"
+              modifiers: []
+            - button: "left"
+              action: "click"
+              clicks: 1
+              duration_ms: 0
+              position: null
+              target: "Find Full Text 子菜单项"
+              modifiers: []
+          key_input: []
+          text_input: []
+          scroll_input: []
+          drag_drop: []
+          hover_input: []
+          window_input: []
+          file_input: []
+          clipboard_input: []
+          wait: []
+          special: []
+        images:
+          step_image: "./test_images/step3.png"
+          result_image: "./test_images/step3_1.png"
+        element_text: "Find Full Text"
+        expected_result: "Find Full Text 子菜单出现"
+        timeout_sec: 120
+        retry: 0
+
+      - id: step_4_check_progress
+        name: "步骤4：查看查找进度"
+        description: "观察左侧边栏中的全文查找进度。"
+        action:
+          - "查看左侧边栏进度状态"
+        actions: null
+        images:
+          step_image: null
+          result_image: "./test_images/step4.png"
+        element_text: null
+        expected_result: "左侧边栏显示查找进度"
+        timeout_sec: 120
+        retry: 0
+
+      - id: done
+        name: "完成"
+        description: "当进度已显示，说明系统正在查找全文。"
+        action:
+          - "等待查找完成或继续其他操作"
+        actions: null
+        images:
+          step_image: null
+          result_image: null
+        element_text: null
+        expected_result: "查找流程进入后台运行"
+        timeout_sec: 120
+        retry: 0

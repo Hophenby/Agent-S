@@ -4,6 +4,8 @@ from typing import Dict, List, Tuple
 
 from agents.grounding import ACI
 from agents.worker import Worker
+from core.observation import Observation
+from agents.execution_summary import ExecutionSummary
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -85,13 +87,10 @@ class AgentS3(UIAgent):
             instruction_markdown_path=self.instruction_markdown_path,
         )
 
-    def predict(self, instruction: str, observation: Dict) -> Tuple[Dict, List[Dict]]:
+    def predict(self, instruction: str, observation: Observation) -> ExecutionSummary:
         # Initialize the three info dictionaries
-        executor_info, actions = self.executor.generate_next_action(
+        executor_info= self.executor.generate_next_action(
             instruction=instruction, obs=observation
         )
 
-        # concatenate the three info dictionaries
-        info = {**{k: v for d in [executor_info or {}] for k, v in d.items()}}
-
-        return info, actions
+        return executor_info

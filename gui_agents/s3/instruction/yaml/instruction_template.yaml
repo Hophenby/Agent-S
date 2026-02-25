@@ -1,0 +1,122 @@
+name: "<INSTRUCTION_WORKFLOW_NAME>"
+
+metadata:
+  title: "<USAGE_GUIDE_TITLE>"
+  software:
+    name: "<SOFTWARE_NAME>"
+    version: "<SOFTWARE_VERSION>"
+  language: "zh-CN"
+  source_markdown: "<OPTIONAL_SOURCE_MARKDOWN_PATH>" # 可选，如 ./example_instruction.md
+  author: "<OPTIONAL_AUTHOR>" # 可选
+  updated_at: "<YYYY-MM-DD>" # 可选
+
+on:
+  workflow_dispatch:
+
+jobs:
+  instruction_flow:
+    name: "<FLOW_NAME>"
+    runs-on: "human-desktop"
+    steps:
+      - id: "step_1"
+        name: "步骤1：<STEP_NAME>"
+        description: "<STEP_DESCRIPTION>"
+        action:
+          - "<ACTION_1>"
+          - "<ACTION_2>" # 可选
+        actions: # 可选：结构化操作描述，适合机器执行或校验
+          mouse_input: # 可选，支持多个鼠标动作
+            - button: "left" # left | right | middle | back | forward
+              action: "click" # click | double_click | press | release | long_press
+              clicks: 1 # 可选，默认1
+              duration_ms: 0 # 可选，long_press 时建议填写
+              position: { x: 0, y: 0 } # 可选，屏幕坐标
+              target: "<UI_ELEMENT_OR_REGION>" # 可选，控件名或区域描述
+              modifiers: ["Ctrl"] # 可选，如 Ctrl/Alt/Shift/Win
+          key_input: # 可选，支持多个组合键或按键序列
+            - keys: ["Ctrl", "S"] # 组合键
+              hold_ms: 0 # 可选，按住时长
+              repeat: 1 # 可选，重复次数
+          text_input: # 可选，支持多段文本输入
+            - text: "<TEXT_TO_TYPE>"
+              clear_before: false # 可选，是否先清空输入框
+              input_method: "direct" # direct | ime
+          scroll_input: # 可选
+            - direction: "down" # up | down | left | right
+              amount: 3 # 滚动单位数量
+              unit: "notch" # notch | pixel | page
+              position: { x: 0, y: 0 } # 可选
+              target: "<SCROLLABLE_REGION>" # 可选
+          drag_drop: # 可选
+            - from: "<DRAG_SOURCE>" # 可选，元素或坐标
+              to: "<DROP_TARGET>" # 可选，元素或坐标
+              button: "left"
+              duration_ms: 200 # 可选
+          hover_input: # 可选
+            - target: "<HOVER_TARGET>"
+              duration_ms: 200 # 可选
+          window_input: # 可选
+            - action: "activate" # activate | maximize | minimize | restore | close
+              title: "<WINDOW_TITLE>"
+          file_input: # 可选
+            - dialog_action: "open" # open | save | select_folder
+              path: "<FILE_OR_FOLDER_PATH>"
+              filename: "<OPTIONAL_FILENAME>" # 可选
+          clipboard_input: # 可选
+            - action: "paste" # copy | cut | paste | set_text
+              text: "<OPTIONAL_TEXT>" # 可选，set_text 时使用
+          wait: # 可选
+            - condition: "<WAIT_FOR_CONDITION>" # 如 窗口出现/按钮可点击
+              timeout_sec: 30
+          special: # 可选，用自然语言描述特殊操作
+            - description: "<SPECIAL_OPERATION_DESCRIPTION>"
+        images:
+          step_image: "<OPTIONAL_STEP_IMAGE_PATH_OR_NULL>" # 可选，示例：./test_images/step1.png 或 null
+          result_image: "<OPTIONAL_RESULT_IMAGE_PATH_OR_NULL>" # 可选，示例：./test_images/step1_result.png 或 null
+        element_text: "<ELEMENT_TEXT>" # 可选，描述性文本信息，如按钮文字、提示信息等，用于OCR等识别定位
+        pre_processing_delay_millisec: 50 # 可选，执行前等待时间，单位毫秒
+        post_processing_delay_millisec: 50 # 可选，执行后等待时间，单位毫秒
+        expected_result: "<EXPECTED_RESULT_TEXT>" # 可选
+        timeout_sec: 120 # 可选
+        retry: 0 # 可选
+
+      - id: "step_2"
+        name: "步骤2：<STEP_NAME>"
+        description: "<STEP_DESCRIPTION>"
+        action:
+          - "<ACTION_1>"
+        actions: null # 可选，结构化操作
+        images:
+          step_image: null
+          result_image: null
+        expected_result: "<EXPECTED_RESULT_TEXT>"
+
+      - id: "step_n"
+        name: "步骤N：<STEP_NAME>"
+        description: "<STEP_DESCRIPTION>"
+        action:
+          - "<ACTION_1>"
+        actions: null # 可选，结构化操作
+        images:
+          step_image: null
+          result_image: null
+
+      - id: "done"
+        name: "完成"
+        description: "<FINAL_SUMMARY>"
+        action:
+          - "<POST_ACTION_OR_NEXT_STEP>"
+        actions: null # 可选，结构化操作
+        images:
+          step_image: null
+          result_image: null
+
+# 使用说明：
+# 1) 将所有 <...> 占位符替换为真实内容。
+# 2) images.step_image / images.result_image 可填 null 表示无图片。
+# 3) action 为自然语言步骤，actions 为结构化操作描述，可二者并存。
+# 4) 可按需增加/删除 steps，保持 id 唯一且有序。
+# 5) 若需要机器校验，可在每个 step 增加字段：
+#    - precondition: "<执行前条件>"
+#    - success_criteria: "<成功判定标准>"
+#    - output: "<产出物路径或文本>"

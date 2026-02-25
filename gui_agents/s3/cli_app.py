@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from agents.agent_s import AgentS3
 from agents.grounding import LegacyACI, get_feedback_renderer
+from core.observation import Observation
 from utils.common_utils import RUNTIME_LOG_PATH
 from utils.local_env import LocalEnv
 
@@ -197,7 +198,7 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
         bbox_annotation_path: Optional path to bounding box annotation JSON file
     """
     global paused
-    obs = {}
+    obs = Observation()
     traj = "Task:\n" + instruction
     subtask_traj = ""
     fb_note = ""
@@ -226,10 +227,10 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
         print(f"\n📸 Captured screenshot of size: {len(screenshot_bytes) / 1024:.2f} KB")
 
         # Prepare observation
-        obs["screenshot"] = screenshot_bytes
+        obs.screenshot = screenshot_bytes
         original_byteio = io.BytesIO()
         pyautogui.screenshot().save(original_byteio, format="PNG")
-        obs["original_screenshot"] = original_byteio.getvalue()
+        obs.original_screenshot = original_byteio.getvalue()
         
         # Add bounding box annotations to observation if available
         if bbox_annotation_data:
@@ -252,36 +253,21 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
         print(f"\n🔄 Step {step + 1}/15: Getting next action from agent...")
 
         # Get next action code from the agent with enhanced instruction
-        info, code = agent.predict(instruction=enhanced_instruction, observation=obs)
+        summary = agent.predict(instruction=enhanced_instruction, observation=obs)
 
-        # Normalize the returned action(s) to a list
-        actions = code
-        if isinstance(actions, dict):
-            actions = [actions]
-        if not isinstance(actions, list) or len(actions) == 0:
+        if summary.executable is None:
             print("⚠️  No code returned by agent, stopping execution.")
             break
 
         # Extract the first action and normalize to an executable string.
-        first_action = actions[0]
-        exec_str = None
-
-        # LegacyACI may return a structured dict: {"result": <exec_code_or_status>, "feedback_image_base64":..., "annotation":...}
-        if isinstance(first_action, dict):
-            exec_str = first_action.get("result")
-            fb_note = first_action.get("annotation")
-            if fb_note:
-                print(f"🔖 Feedback annotation: {fb_note}")
-        else:
-            exec_str = first_action
-            fb_note = ""
+        exec_str = summary.exec_str
 
         print(f"📝 Agent returned action code:\n{exec_str}\n")
-        if exec_str is None or (isinstance(exec_str, str) and exec_str.strip() == ""):
+        if exec_str is None:
             print("⚠️  No code returned by agent, stopping execution.")
             break
 
-        if isinstance(exec_str, str) and ("done" in exec_str.lower() or "fail" in exec_str.lower()):
+        if ("done" in exec_str.lower() or "fail" in exec_str.lower()):
             if platform.system() == "Darwin":
                 os.system(
                     f'osascript -e \'display dialog "Task Completed" with title "OpenACI Agent" buttons "OK" default button "OK"\''
@@ -293,10 +279,10 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
 
             break
 
-        if isinstance(exec_str, str) and "next" in exec_str.lower():
+        if "next" in exec_str.lower():
             continue
 
-        if isinstance(exec_str, str) and "wait" in exec_str.lower():
+        if "wait" in exec_str.lower():
             print("⏳ Agent requested wait...")
             time.sleep(5)
             continue
@@ -310,16 +296,16 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
             time.sleep(0.1)
 
         # Ask for permission before executing
-        exec(exec_str)
+        summary.call_executable()
         time.sleep(1.0)
 
         # Update task and subtask trajectories
-        if "reflection" in info and "executor_plan" in info:
+        if summary.reflection is not None and summary.plan is not None:
             traj += (
                 "\n\nReflection:\n"
-                + str(info["reflection"])
+                + str(summary.reflection)
                 + "\n\n----------------------\n\nPlan:\n"
-                + info["executor_plan"]
+                + summary.plan
             )
 
 

@@ -16,11 +16,12 @@ from io import BytesIO
 from PIL import Image
 
 from core.mllm import LMMAgent
+from core.observation import Observation
 from utils.patch_locator import locate_patch
 from utils.common_utils import call_llm_formatted, create_pyautogui_code, parse_code_from_string
 from memory.procedural_memory import PROCEDURAL_MEMORY
 from utils.formatters import CODE_VALID_FORMATTER, SINGLE_ACTION_FORMATTER
-from agents.instruction import Instruction, InstructionPage
+from instruction.instruction import Instruction, InstructionPage
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -262,7 +263,7 @@ class InstructionReader:
 
     def run_generation(
         self,
-        observation: Dict,
+        observation: Observation,
         instruction: str,
         generator_message: str
     ) -> Tuple[Dict, List]:
@@ -275,7 +276,7 @@ class InstructionReader:
     
         self.llm_client.add_message(
             text_content=current_step_message(instruction, generator_message),
-            image_content=observation["screenshot"],
+            image_content=observation.screenshot,
             role="user",
         )
 
@@ -649,7 +650,7 @@ current_step_message = lambda instruction, generator_message: textwrap.dedent(
     请根据当前任务指令和以前的操作，以及目前状态的屏幕截图，在说明书中找到最匹配这一步需要操作的按钮或位置的页面。
     """
 )
-def process_generation_result(observation: Dict, result: Dict) -> Dict:
+def process_generation_result(observation: Observation, result: Dict) -> Dict:
     """处理生成结果，提取关键信息
     
     Args:
@@ -661,7 +662,7 @@ def process_generation_result(observation: Dict, result: Dict) -> Dict:
     # logger.info(f"Processing generation result: {result}")
     if result.get("page_content", None):
         content_image = Image.open(BytesIO(result["page_content"]))
-        obs_image = Image.open(BytesIO(observation["original_screenshot"]))
+        obs_image = Image.open(BytesIO(observation.original_screenshot))
         match_result = locate_patch(obs_image, content_image, score_threshold=0.5)
         if match_result:
             result["match_box"] = {

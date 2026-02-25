@@ -12,6 +12,8 @@ import numpy as np
 import base64
 from io import BytesIO
 
+from core.observation import Observation
+from agents.LegacyACIResult import LegacyACIResult
 from memory.procedural_memory import PROCEDURAL_MEMORY
 from core.mllm import LMMAgent
 from utils.common_utils import RUNTIME_LOG_PATH, call_llm_safe
@@ -21,9 +23,9 @@ import json
 
 logger = logging.getLogger("desktopenv.agent")
 
-feedback_renderer: Optional[Callable[[Image.Image], bytes]] = None
+feedback_renderer: Optional[Callable[[bytes], bytes]] = None
 
-def get_feedback_renderer() -> Optional[Callable[[Image.Image], bytes]]:
+def get_feedback_renderer() -> Optional[Callable[[bytes], bytes]]:
     return feedback_renderer
 class ACI:
     def __init__(self):
@@ -197,7 +199,7 @@ class LegacyACI(ACI):
         self._ocr_cache = None
         self._ocr_cache_screenshot_hash = None
 
-    def assign_screenshot(self, obs: Dict):
+    def assign_screenshot(self, obs: Observation):
         """MCP 接口：分配当前截图（供后续操作和反馈绘制使用）。
 
         名称: LegacyACI.assign_screenshot
@@ -319,14 +321,7 @@ class LegacyACI(ACI):
             img = np.zeros((self.height, self.width, 3), dtype=np.uint8) + 255
             return img
 
-        screenshot = self.obs.get(image_key) if image_key else self.obs
-        # if base64 string
-        if isinstance(screenshot, str):
-            try:
-                b = base64.b64decode(screenshot)
-            except Exception:
-                b = screenshot.encode()
-            screenshot = b
+        screenshot: bytes = self.obs[image_key]
 
         # if bytes
         if isinstance(screenshot, (bytes, bytearray)):
@@ -334,14 +329,6 @@ class LegacyACI(ACI):
             arr = np.array(pil)
             # PIL gives RGB, convert to BGR
             img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        elif isinstance(screenshot, Image.Image):
-            arr = np.array(screenshot.convert("RGB"))
-            img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        elif isinstance(screenshot, np.ndarray):
-            img = screenshot.copy()
-            # If RGB, convert to BGR heuristically
-            if img.shape[2] == 3:
-                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         else:
             img = np.zeros((self.height, self.width, 3), dtype=np.uint8) + 255
 
@@ -351,12 +338,12 @@ class LegacyACI(ACI):
             img = cv2.resize(img, (self.width, self.height))
         return img
 
-    def _encode_img_to_b64(self, img_bgr) -> str:
+    def _encode_img_to_bytes(self, img_bgr) -> bytes:
         _, buf = cv2.imencode('.jpg', img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-        return base64.b64encode(buf.tobytes()).decode()
+        return buf.tobytes()
 
-    def _draw_feedback(self, coords_rel=None, bbox_rel=None, text: str = '') -> str:
-        """Draw the last operation (point or bbox) and annotation text on the screenshot and return base64 jpg string."""
+    def _draw_feedback(self, coords_rel=None, bbox_rel=None, text: str = '') -> bytes:
+        """Draw the last operation (point or bbox) and annotation text on the screenshot and return raw jpg bytes."""
         img = self._load_image_as_bgr()
         # draw bbox if provided
         if bbox_rel is not None:
@@ -372,7 +359,7 @@ class LegacyACI(ACI):
         else:
             cv2.putText(img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 128, 0), 2)
 
-        return self._encode_img_to_b64(img)
+        return self._encode_img_to_bytes(img)
 
     @agent_action
     def find_element_by_text(self, text_query: str, region: Optional[Tuple[float, float, float, float]] = None,
@@ -417,14 +404,14 @@ class LegacyACI(ACI):
         return rel_coords
     
 
-    def _wrap_result(self, result: Any, coords_rel=None, bbox_rel=None, text: str = '') -> Dict:
+    def _wrap_result(self, result: str, coords_rel=None, bbox_rel=None, text: str = '') -> 'LegacyACIResult':
         """Return a dict containing the execution result, a base64-encoded feedback image, and annotation text."""
         global feedback_renderer
-        img_b64 = self._draw_feedback(coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
+        img_bytes = self._draw_feedback(coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
 
         # Publish a renderer callable to the module-level `feedback_renderer` so external
         # callers (e.g., cli_app) can render this same annotation on arbitrary screenshots.
-        def _renderer(screenshot_input) -> Image.Image:
+        def _renderer(screenshot_input: bytes) -> bytes:
             """Render the same feedback (coords_rel/bbox_rel/text) onto the provided screenshot.
 
             Accepts PIL.Image, raw bytes, numpy array, or dict{'screenshot': ...}.
@@ -439,12 +426,12 @@ class LegacyACI(ACI):
                 # Fallback: attempt to draw by temporarily setting obs and using _load_image_as_bgr/_draw_feedback
                 prev_obs = getattr(self, "obs", None)
                 try:
-                    if isinstance(screenshot_input, dict):
+                    if isinstance(screenshot_input, Observation):
                         self.obs = screenshot_input
                     else:
-                        self.obs = {"screenshot": screenshot_input}
-                    b64 = self._draw_feedback(coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
-                    return BytesIO(base64.b64decode(b64)).getvalue()
+                        self.obs = Observation(screenshot=screenshot_input)
+                    bytes = self._draw_feedback(coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
+                    return bytes
                 finally:
                     try:
                         self.obs = prev_obs
@@ -458,15 +445,11 @@ class LegacyACI(ACI):
         except Exception:
             pass
 
-        return {
-            "result": result,
-            "feedback_image_base64": img_b64,
-            "annotation": text,
-        }
+        return LegacyACIResult(result=result, feedback_image_bytes=img_bytes, annotation=text)
 
     # Public helpers to render feedback on an arbitrary screenshot (no side-effects)
-    def draw_feedback_b64(self, screenshot_input, coords_rel=None, bbox_rel=None, text: str = "") -> str:
-        """Render feedback (circle/bbox + text) on a given screenshot and return a base64 JPEG string.
+    def draw_feedback_bytes(self, screenshot_input, coords_rel=None, bbox_rel=None, text: str = "") -> bytes:
+        """Render feedback (circle/bbox + text) on a given screenshot and return a raw JPEG bytes.
 
         Args:
             screenshot_input: one of the supported screenshot formats (bytes, PIL.Image, numpy.ndarray, or a dict {'screenshot': ...}).
@@ -475,19 +458,19 @@ class LegacyACI(ACI):
             text: annotation text to draw near the operation
 
         Returns:
-            base64-encoded JPEG string of the annotated image.
+            raw bytes of the annotated image.
 
         Notes:
             - This method temporarily sets `self.obs` to the provided screenshot for rendering and restores the previous value on return.
             - It does not change any other state (best-effort).
         """
-        prev_obs = getattr(self, "obs", None)
+        prev_obs: Observation = getattr(self, "obs", None)
         try:
             # Accept either raw image payload or a wrapped dict
-            if isinstance(screenshot_input, dict):
+            if isinstance(screenshot_input, Observation):
                 self.obs = screenshot_input
             else:
-                self.obs = {"screenshot": screenshot_input}
+                self.obs = Observation(screenshot=screenshot_input)
 
             return self._draw_feedback(coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
         finally:
@@ -496,14 +479,6 @@ class LegacyACI(ACI):
                 self.obs = prev_obs
             except Exception:
                 self.obs = None
-
-    def draw_feedback_bytes(self, screenshot_input, coords_rel=None, bbox_rel=None, text: str = "") -> bytes:
-        """Render feedback and return raw JPEG bytes.
-
-        Convenience wrapper that decodes the base64 string produced by draw_feedback_b64.
-        """
-        b64 = self.draw_feedback_b64(screenshot_input, coords_rel=coords_rel, bbox_rel=bbox_rel, text=text)
-        return base64.b64decode(b64)
 
     # Common actions using relative coordinates (values in [0,1])
     @agent_action

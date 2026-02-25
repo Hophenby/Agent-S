@@ -16,8 +16,10 @@ toml
 black
 pytesseract
 google-genai
+PyYAML
 
 # Platform-specific dependencies
 pyobjc; platform_system == "Darwin"
 pywinauto; platform_system == "Windows"
 pywin32; platform_system == "Windows" 
+opencv-python

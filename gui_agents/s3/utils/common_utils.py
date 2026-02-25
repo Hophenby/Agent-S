@@ -7,6 +7,8 @@ from PIL import Image
 
 from typing import Optional, Tuple, Dict
 
+from core.observation import Observation
+from agents.LegacyACIResult import LegacyACIResult
 from memory.procedural_memory import PROCEDURAL_MEMORY
 
 import logging
@@ -19,7 +21,7 @@ timestamp = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
 os.makedirs("logs/" + timestamp, exist_ok=True)
 RUNTIME_LOG_PATH = os.path.join("logs", timestamp)
 
-def create_pyautogui_code(agent, code: str, obs: Optional[Dict]) -> str:
+def create_pyautogui_code(agent, code: str, obs: Optional[Observation]) -> str:
     """
     Attempts to evaluate the code into a pyautogui code snippet with grounded actions using the observation screenshot.
 
@@ -49,7 +51,7 @@ def create_pyautogui_code(agent, code: str, obs: Optional[Dict]) -> str:
     # If an agent returned a structured dict, store it on the agent for callers
     # and return the executable code string (or the original result if not a dict).
     if (obs is not None and
-        isinstance(exec_result, dict) and 
+        isinstance(exec_result, LegacyACIResult) and 
         "result" in exec_result):
         try:
             agent.last_action_feedback = exec_result
