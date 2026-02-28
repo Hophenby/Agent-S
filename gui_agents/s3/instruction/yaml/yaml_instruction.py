@@ -149,6 +149,13 @@ class YamlInstruction:
     on: Dict[str, Any]
     jobs: Dict[str, Job]
 
+    @property
+    def steps(self) -> List[Step]:
+        all_steps = []
+        for job in self.jobs.values():
+            all_steps.extend(job.steps)
+        return all_steps
+
 
 class InstructionParseError(ValueError):
     pass

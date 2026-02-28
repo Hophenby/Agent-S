@@ -300,10 +300,10 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
         time.sleep(1.0)
 
         # Update task and subtask trajectories
-        if summary.reflection is not None and summary.plan is not None:
+        if summary.additionaal_info is not None and summary.plan is not None:
             traj += (
                 "\n\nReflection:\n"
-                + str(summary.reflection)
+                + str(summary.additionaal_info)
                 + "\n\n----------------------\n\nPlan:\n"
                 + summary.plan
             )

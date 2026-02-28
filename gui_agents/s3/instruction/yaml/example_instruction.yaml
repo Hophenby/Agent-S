@@ -69,7 +69,6 @@ jobs:
         description: "在 References 下拉菜单中选择 Find Full Text。"
         action:
           - "在下拉菜单中点击 Find Full Text"
-          - "在子菜单中再次选择 Find Full Text"
         actions:
           mouse_input:
             - button: "left"
@@ -79,6 +78,30 @@ jobs:
               position: null
               target: "Find Full Text 菜单项"
               modifiers: []
+          key_input: []
+          text_input: []
+          scroll_input: []
+          drag_drop: []
+          hover_input: []
+          window_input: []
+          file_input: []
+          clipboard_input: []
+          wait: []
+          special: []
+        images:
+          step_image: "./test_images/step3.png"
+          result_image: "./test_images/step3_1a.png"
+        element_text: "Find Full Text"
+        expected_result: "Find Full Text 子菜单出现"
+        timeout_sec: 120
+        retry: 0
+      - id: step_31_find_full_text
+        name: "步骤3.1：在子菜单中选择 Find Full Text"
+        description: "在 References 子菜单中选择 Find Full Text。"
+        action:
+          - "在子菜单中再次选择 Find Full Text"
+        actions:
+          mouse_input:
             - button: "left"
               action: "click"
               clicks: 1
@@ -97,10 +120,10 @@ jobs:
           wait: []
           special: []
         images:
-          step_image: "./test_images/step3.png"
-          result_image: "./test_images/step3_1.png"
+          step_image: "./test_images/step3_1.png"
+          result_image: "./test_images/step4.png"
         element_text: "Find Full Text"
-        expected_result: "Find Full Text 子菜单出现"
+        expected_result: "Find Full Text 子菜单消失"
         timeout_sec: 120
         retry: 0
 

@@ -237,8 +237,13 @@ def execute_step(
                 )
                 break
 
-    if step.actions is None:
-        return None
+    if bbox is None:
+        return ExecutionSummary(
+        plan=step.description or "",
+        plan_action=";\n".join(step.action) if step.action else "",
+        executable=None,
+        additionaal_info="No matching element found for step, meaning failed to execute this step. ",
+    )
 
     def call_executable():
         time.sleep(step.pre_processing_delay_millisec / 1000 if step.pre_processing_delay_millisec else 0.05)
@@ -256,9 +261,9 @@ def execute_step(
 
     return ExecutionSummary(
         plan=step.description or "",
-        plan_code="",  # No code generation in this executor
+        plan_action=";\n".join(step.action) if step.action else "",
         executable=call_executable,
-        reflection="called by yaml configuration",
+        additionaal_info="called by yaml configuration",
     )
 
 

@@ -10,6 +10,9 @@ from core.mllm import LMMAgent
 from core.observation import Observation
 from agents.execution_summary import ExecutionSummary
 from agents.LegacyACIResult import LegacyACIResult
+from instruction.yaml.yaml_instruction_auto_executor import execute_step
+from instruction.yaml.yaml_instruction_parser import load_instruction
+from instruction.yaml.yaml_instruction import YamlInstruction
 from instruction.instruction_reader import InstructionReader, process_generation_result
 from memory.procedural_memory import PROCEDURAL_MEMORY
 from utils.common_utils import (
@@ -32,6 +35,8 @@ class Worker(BaseModule):
     generator_agent: LMMAgent
     reflection_agent: LMMAgent
     instruction_agent: InstructionReader
+    yaml_instruction: YamlInstruction
+    yaml_step_index: int = 0
     def __init__(
         self,
         worker_engine_params: Dict,
@@ -39,7 +44,7 @@ class Worker(BaseModule):
         platform: str = "ubuntu",
         max_trajectory_length: int = 8,
         enable_reflection: bool = True,
-        instruction_markdown_path: str = "",
+        instruction_yaml_path: str = "",
     ):
         """
         Worker receives the main task and generates actions, without the need of hierarchical planning
@@ -71,8 +76,7 @@ class Worker(BaseModule):
             self.grounding_agent: LegacyACI = grounding_agent
         self.max_trajectory_length = max_trajectory_length
         self.enable_reflection = enable_reflection
-        self.instruction_markdown_path = instruction_markdown_path
-        self.has_instruction_markdown = False
+        self.instruction_yaml_path = instruction_yaml_path
 
         self.reset()
 
@@ -88,34 +92,13 @@ class Worker(BaseModule):
         ):
             skipped_actions.append("call_code_agent")
 
-        sys_prompt = PROCEDURAL_MEMORY.construct_simple_worker_procedural_memory(
-            type(self.grounding_agent), 
-            skipped_actions=skipped_actions, 
-            guidelines=PROCEDURAL_MEMORY.TASK_DESCRIPTION_GUIDELINES, 
-            formatting_instructions=PROCEDURAL_MEMORY.RESPONSE_FORMAT_PROMPT
-        ).replace("CURRENT_OS", self.platform)
+        self.yaml_step_index = 0
+        if self.instruction_yaml_path and os.path.isfile(self.instruction_yaml_path):
+            self.yaml_instruction = load_instruction(self.instruction_yaml_path)
 
-        self.generator_agent = self._create_agent(sys_prompt)
         self.reflection_agent = self._create_agent(
             PROCEDURAL_MEMORY.REFLECTION_ON_TRAJECTORY
-        )
-        if (os.path.isfile(self.instruction_markdown_path)):
-            self.instruction_agent = InstructionReader(
-                llm_client=self._create_agent(),
-                temperature=self.temperature,
-                use_thinking=self.use_thinking,
-            )
-            self.instruction_agent.load_instruction_from_markdown(
-                self.instruction_markdown_path
-            )
-            self.has_instruction_markdown = True
-        else:
-            self.instruction_agent = InstructionReader(
-                llm_client=self._create_agent(),
-                temperature=self.temperature,
-                use_thinking=self.use_thinking,
-            )
-            self.has_instruction_markdown = False
+        )#TODO: 这个还没修改
 
         self.turn_count = 0
         self.worker_history = []
@@ -136,7 +119,7 @@ class Worker(BaseModule):
         # Flush strategy for long-context models: keep all text, only keep latest images
         if engine_type in ["anthropic", "openai", "gemini"]:
             max_images = self.max_trajectory_length
-            for agent in [self.generator_agent, self.reflection_agent]:
+            for agent in [self.reflection_agent]:
                 if agent is None:
                     continue
                 # keep latest k images
@@ -150,10 +133,6 @@ class Worker(BaseModule):
 
         # Flush strategy for non-long-context models: drop full turns
         else:
-            # generator msgs are alternating [user, assistant], so 2 per round
-            if len(self.generator_agent.messages) > 2 * self.max_trajectory_length + 1:
-                self.generator_agent.messages.pop(1)
-                self.generator_agent.messages.pop(1)
             # reflector msgs are all [(user text, user image)], so 1 per round
             if len(self.reflection_agent.messages) > self.max_trajectory_length + 1:
                 self.reflection_agent.messages.pop(1)
@@ -221,107 +200,32 @@ class Worker(BaseModule):
         self.grounding_agent.assign_screenshot(obs)
         # self.grounding_agent.set_task_instruction(instruction)
 
-        generator_message = (
-            "The screen after the last action is provided. It has marked the location of the last action taken."
-            if self.turn_count > 0
-            else "The initial screen is provided. No action has been taken yet."
-        )
+        step_plan = None
 
-        # Load the task into the system prompt
-        if self.turn_count == 0:
-            prompt_with_instructions = self.generator_agent.system_prompt.replace(
-                "TASK_DESCRIPTION", instruction
-            )
-            self.generator_agent.add_system_prompt(prompt_with_instructions)
+        if self.yaml_instruction and self.yaml_step_index < len(self.yaml_instruction.steps):
+            step = self.yaml_instruction.steps[self.yaml_step_index]
+            step_plan = execute_step(step, obs, self.yaml_step_index)
+            if step_plan.can_execute:
+                self.worker_history.append(step_plan.format_summary())
+                self.yaml_step_index += 1
+                self.turn_count += 1
+                return step_plan
+
+        plan = step_plan.format_summary() if step_plan else "No executable plan found in YAML instruction."
 
         # Get the per-step reflection
         reflection, reflection_thoughts = self._generate_reflection(instruction, obs)
-        if reflection:
-            generator_message += f"REFLECTION: You may use this reflection on the previous action and overall trajectory:\n{reflection}\n"
 
-        # Get the grounding agent's knowledge base buffer
-        generator_message += (
-            f"\nCurrent Text Buffer = [{','.join(self.grounding_agent.notes)}]\n"
-        )
-
-        if self.has_instruction_markdown:
-            instruction_reader_response, executed_codes = self.instruction_agent.run_generation(
-                observation=obs,
-                instruction=instruction,
-                generator_message=generator_message,
-            )
-            print("instruction_reader: Executed Codes:", executed_codes)
-
-            instruction_reader_response = process_generation_result(obs, instruction_reader_response)
-            if (instruction_reader_response.get("match_box") is not None):
-                generator_message += f"用户已经在软件的使用说明书中找到了下一步需要操作的区域，对应的区域位置为: {instruction_reader_response.get('match_box')}"
-
-        # Finalize the generator message
-        self.generator_agent.add_message(
-            generator_message, image_content=obs.screenshot, role="user"
-        )
-
-        # Generate the plan and next action
-        format_checkers = [
-            SINGLE_ACTION_FORMATTER,
-            partial(CODE_VALID_FORMATTER, self.grounding_agent, obs),
-        ]
-        plan = call_llm_formatted(
-            self.generator_agent,
-            format_checkers,
-            temperature=self.temperature,
-            use_thinking=self.use_thinking,
-        )
         self.worker_history.append(plan)
-        self.generator_agent.add_message(plan, role="assistant")
         logger.info("PLAN:\n %s", plan)
-
-        # Extract the next action from the plan
-        plan_code = parse_code_from_string(plan)
-        try:
-            assert plan_code, "Plan code should not be empty"
-            exec_code = create_pyautogui_code(self.grounding_agent, plan_code, obs)
-            # If the grounding agent produced structured feedback (LegacyACI),
-            # create_pyautogui_code sets agent.last_action_feedback to that LegacyACIResult.
-            # Feed the annotated feedback image + annotation back into the
-            # generator_agent context so the next planning step can use it.
-            try:
-                fb = getattr(self.grounding_agent, "last_action_feedback", None)
-                if fb and isinstance(fb, LegacyACIResult):
-                    annotation = fb.annotation
-                    img_b64 = fb.feedback_image_base64
-                    # Add as a user message (environment feedback) with image
-                    self.generator_agent.add_message(
-                        text_content=(f"ENV FEEDBACK: {annotation}" if annotation else "ENV FEEDBACK"),
-                        image_content=img_b64,
-                        role="user",
-                    )
-                    # Also add to reflection agent if available so reflection can see it
-                    if getattr(self, "reflection_agent", None):
-                        try:
-                            self.reflection_agent.add_message(
-                                text_content=(f"ENV FEEDBACK: {annotation}" if annotation else "ENV FEEDBACK"),
-                                image_content=img_b64,
-                                role="user",
-                            )
-                        except Exception:
-                            pass
-            except Exception:
-                # best-effort: don't break main flow on feedback attachment failure
-                pass
-        except Exception as e:
-            logger.error(
-                f"Could not evaluate the following plan code:\n{plan_code}\nError: {e}"
-            )
-            exec_code = None
 
         executor_info = ExecutionSummary(
             plan=plan,
-            plan_code=plan_code,
-            executable=exec_code,
-            reflection=reflection,
+            plan_action="",
+            executable=lambda: None,
+            additionaal_info=reflection,
             reflection_thoughts=reflection_thoughts,
-            instruction_reader_response=instruction_reader_response if self.has_instruction_markdown else None,
+            instruction_reader_response=None,
         )
         self.turn_count += 1
         self.screenshot_inputs.append(obs.screenshot)
