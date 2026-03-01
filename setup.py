@@ -32,10 +32,14 @@ setup(
         'pywinauto; platform_system == "Windows"',  # Only for Windows
         'pywin32; platform_system == "Windows"',  # Only for Windows
     ],
-    extras_require={"dev": ["black"]},  # Code formatter for linting
+    extras_require={
+        "dev": ["black"],
+        "langgraph": ["langgraph"],
+    },  # Optional extras for development and graph-based workflow runtime
     entry_points={
         "console_scripts": [
             "agent_s=gui_agents.s3.cli_app:main",
+            "agent_s_yaml_langgraph=gui_agents.s3.instruction.run_yaml_langgraph_instruction:main",
         ],
     },
     classifiers=[

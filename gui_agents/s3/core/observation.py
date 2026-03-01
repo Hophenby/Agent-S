@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class Observation:
@@ -9,7 +9,7 @@ class Observation:
     screenshot:bytes = None  # Compressed Raw bytes of the screenshot image with annotations (e.g., detected elements highlighted)
     original_screenshot:bytes = None  # Uncompressed Raw bytes of the screenshot image
 
-    _others: dict = {}  # Placeholder for any additional metadata or information related to the observation
+    _others: dict = field(default_factory=dict)  # Placeholder for any additional metadata or information related to the observation
 
     _screenshot_b64: str = None  # Base64-encoded string of the screenshot for easy transmission or embedding
 

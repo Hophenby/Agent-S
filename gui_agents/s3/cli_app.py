@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 from agents.agent_s import AgentS3
 from agents.grounding import LegacyACI, get_feedback_renderer
 from core.observation import Observation
+from instruction.yaml.yaml_instruction_auto_executor import SafeWorkflowError
 from utils.common_utils import RUNTIME_LOG_PATH
 from utils.local_env import LocalEnv
 
@@ -296,7 +297,18 @@ def run_agent(agent: AgentS3, instruction: str, scaled_width: int, scaled_height
             time.sleep(0.1)
 
         # Ask for permission before executing
-        summary.call_executable()
+        try:
+            result = summary.call_executable()
+        except SafeWorkflowError as exc:
+            print(f"⚠️  Safe runner stopped: {exc}")
+            break
+        if getattr(getattr(agent, "executor", None), "yaml_runtime", None) == "langgraph":
+            last_error = getattr(agent.executor, "yaml_failure_message", None)
+            if last_error:
+                print(f"⚠️  LangGraph safe runner stopped: {last_error}")
+            else:
+                print("✅ LangGraph safe runner completed.")
+            break
         time.sleep(1.0)
 
         # Update task and subtask trajectories
@@ -400,10 +412,19 @@ def main():
         help="Enable local coding environment for code execution (WARNING: Executes arbitrary code locally)",
     )
     parser.add_argument(
+        "--instruction_yaml_path",
         "--instruction_markdown_path",
+        dest="instruction_yaml_path",
         type=str,
         default="",
-        help="Path to the markdown file containing task instructions.",
+        help="Path to the YAML instruction file for safe-runner mode.",
+    )
+    parser.add_argument(
+        "--yaml_runtime",
+        type=str,
+        default="native",
+        choices=["native", "langgraph"],
+        help="YAML safe-runner runtime: native stepwise executor or LangGraph workflow runtime.",
     )
 
     args = parser.parse_args()
@@ -456,7 +477,8 @@ def main():
         platform=current_platform,
         max_trajectory_length=args.max_trajectory_length,
         enable_reflection=args.enable_reflection,
-        instruction_markdown_path=args.instruction_markdown_path,
+        instruction_yaml_path=args.instruction_yaml_path,
+        yaml_runtime=args.yaml_runtime,
     )
 
     while True:

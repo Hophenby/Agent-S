@@ -1,4 +1,4 @@
-
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +23,42 @@ class Metadata:
 class Images:
     step_image: Optional[str] = None
     result_image: Optional[str] = None
+
+
+@dataclass
+class TemplateMatching:
+    threshold: Optional[float] = None
+    scales: List[float] = field(default_factory=list)
+    min_scale: Optional[float] = None
+    max_scale: Optional[float] = None
+    scale_step: Optional[float] = None
+
+
+@dataclass
+class Postcondition:
+    id: str
+    result_image: Optional[str] = None
+    expected_text: Optional[str] = None
+    description: Optional[str] = None
+
+
+@dataclass
+class TransitionCondition:
+    status: Optional[str] = None
+    matched_postcondition: Optional[str] = None
+    result_image_matched: Optional[bool] = None
+    expected_result_matched: Optional[bool] = None
+    text_present: Optional[str] = None
+    text_absent: Optional[str] = None
+    always: Optional[bool] = None
+
+
+@dataclass
+class Transition:
+    goto: Optional[str] = None
+    when: TransitionCondition = field(default_factory=TransitionCondition)
+    else_branch: bool = False
+    label: Optional[str] = None
 
 
 @dataclass
@@ -126,12 +162,17 @@ class Step:
     action: List[str] = field(default_factory=list)
     actions: Optional[Actions] = None
     images: Images = field(default_factory=Images)
+    template_matching: TemplateMatching = field(default_factory=TemplateMatching)
     expected_result: Optional[str] = None
-    timeout_sec: Optional[int] = None
+    timeout_sec: Optional[float] = None
     pre_processing_delay_millisec: Optional[float] = None
     post_processing_delay_millisec: Optional[float] = None
     retry: Optional[int] = None
     element_text: Optional[str] = None
+    on_success: Optional[str] = None
+    on_failure: Optional[str] = None
+    postconditions: List[Postcondition] = field(default_factory=list)
+    transitions: List[Transition] = field(default_factory=list)
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -159,3 +200,26 @@ class YamlInstruction:
 
 class InstructionParseError(ValueError):
     pass
+
+
+def resolve_instruction_paths(instruction: "YamlInstruction", base_dir: str | Path) -> "YamlInstruction":
+    base_path = Path(base_dir)
+
+    def resolve_path(path: Optional[str]) -> Optional[str]:
+        if not path:
+            return path
+        candidate = Path(path)
+        if candidate.is_absolute():
+            return str(candidate)
+        return str((base_path / candidate).resolve())
+
+    instruction.metadata.source_markdown = resolve_path(instruction.metadata.source_markdown)
+
+    for job in instruction.jobs.values():
+        for step in job.steps:
+            step.images.step_image = resolve_path(step.images.step_image)
+            step.images.result_image = resolve_path(step.images.result_image)
+            for postcondition in step.postconditions:
+                postcondition.result_image = resolve_path(postcondition.result_image)
+
+    return instruction

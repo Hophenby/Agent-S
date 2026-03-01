@@ -1,50 +1,47 @@
 name: "EndNote FindFullText Instruction"
+
 metadata:
-  title: "EndNote 使用指南：FindFullText 功能入门"
+  title: "EndNote usage guide: Find Full Text"
   software:
     name: "EndNote"
     version: "2024"
   language: "zh-CN"
-  source_markdown: "./example_instruction.md"
-  author: null
-  updated_at: null
+  source_markdown: "../example_instruction.md"
 
 on:
   workflow_dispatch:
 
 jobs:
   instruction_flow:
-    name: "FindFullText 操作流程"
+    name: "FindFullText flow"
     runs-on: "human-desktop"
     steps:
-      - id: step_1_open_app
-        name: "步骤1：打开文件"
-        description: "打开 EndNote 软件，进入主界面。"
+      - id: "step_1_open_app"
+        name: "Open EndNote"
+        description: "Launch EndNote and wait until the main window is visible."
         action:
-          - "双击桌面上的 EndNote 图标"
-          - "或者通过开始菜单搜索并打开 EndNote"
+          - "Open EndNote from the desktop or Start menu."
         actions: null
         images:
           step_image: null
           result_image: "./test_images/step1.png"
-        element_text: null
-        expected_result: "进入 EndNote 主界面"
+        expected_result: "EndNote"
+        on_success: "step_2_click_references"
         timeout_sec: 120
         retry: 0
 
-      - id: step_2_click_references
-        name: "步骤2：点击References菜单"
-        description: "在顶部菜单栏中点击 References。"
+      - id: "step_2_click_references"
+        name: "Open References Menu"
+        description: "Click the References menu in the top menu bar."
         action:
-          - "点击顶部菜单栏中的 References"
+          - "Click References in the top menu."
         actions:
           mouse_input:
             - button: "left"
               action: "click"
               clicks: 1
-              duration_ms: 0
               position: null
-              target: "References 菜单"
+              target: "References menu"
               modifiers: []
           key_input: []
           text_input: []
@@ -59,24 +56,28 @@ jobs:
         images:
           step_image: "./test_images/step2.png"
           result_image: "./test_images/step2_r.png"
+        template_matching:
+          min_scale: 0.9
+          max_scale: 1.1
+          scale_step: 0.05
         element_text: "References"
-        expected_result: "References 下拉菜单出现"
+        expected_result: "Find Full Text"
+        on_success: "step_3_find_full_text"
         timeout_sec: 120
         retry: 0
 
-      - id: step_3_find_full_text
-        name: "步骤3：在下拉菜单中选择 Find Full Text"
-        description: "在 References 下拉菜单中选择 Find Full Text。"
+      - id: "step_3_find_full_text"
+        name: "Open Find Full Text Submenu"
+        description: "After the References menu opens, select the Find Full Text submenu."
         action:
-          - "在下拉菜单中点击 Find Full Text"
+          - "Click Find Full Text in the References dropdown menu."
         actions:
           mouse_input:
             - button: "left"
               action: "click"
               clicks: 1
-              duration_ms: 0
               position: null
-              target: "Find Full Text 菜单项"
+              target: "Find Full Text menu item"
               modifiers: []
           key_input: []
           text_input: []
@@ -90,24 +91,48 @@ jobs:
           special: []
         images:
           step_image: "./test_images/step3.png"
-          result_image: "./test_images/step3_1a.png"
+          result_image: null
+        template_matching:
+          min_scale: 0.9
+          max_scale: 1.1
+          scale_step: 0.05
         element_text: "Find Full Text"
-        expected_result: "Find Full Text 子菜单出现"
+        postconditions:
+          - id: "submenu_visible"
+            result_image: "./test_images/step3_1a.png"
+            expected_text: "Find Full Text"
+            description: "The submenu expands successfully."
+        transitions:
+          - label: "submenu visible"
+            when:
+              status: "success"
+              matched_postcondition: "submenu_visible"
+            goto: "step_31_find_full_text"
+          - label: "retry from references"
+            when:
+              status: "no_postcondition_matched"
+            goto: "step_2_click_references"
+          - label: "ambiguous menu state"
+            when:
+              status: "ambiguous_postcondition"
+            goto: "step_2_click_references"
+          - else: true
+            goto: "step_2_click_references"
         timeout_sec: 120
         retry: 0
-      - id: step_31_find_full_text
-        name: "步骤3.1：在子菜单中选择 Find Full Text"
-        description: "在 References 子菜单中选择 Find Full Text。"
+
+      - id: "step_31_find_full_text"
+        name: "Run Find Full Text"
+        description: "Choose the final Find Full Text command from the submenu."
         action:
-          - "在子菜单中再次选择 Find Full Text"
+          - "Click the Find Full Text command in the submenu."
         actions:
           mouse_input:
             - button: "left"
               action: "click"
               clicks: 1
-              duration_ms: 0
               position: null
-              target: "Find Full Text 子菜单项"
+              target: "Find Full Text submenu item"
               modifiers: []
           key_input: []
           text_input: []
@@ -121,36 +146,49 @@ jobs:
           special: []
         images:
           step_image: "./test_images/step3_1.png"
-          result_image: "./test_images/step4.png"
+          result_image: null
+        template_matching:
+          min_scale: 0.9
+          max_scale: 1.1
+          scale_step: 0.05
         element_text: "Find Full Text"
-        expected_result: "Find Full Text 子菜单消失"
+        postconditions:
+          - id: "progress_started"
+            result_image: "./test_images/step4.png"
+            description: "The left progress panel appears."
+        transitions:
+          - when:
+              status: "success"
+              matched_postcondition: "progress_started"
+            goto: "step_4_check_progress"
+          - when:
+              status: "failure"
+            goto: "step_2_click_references"
         timeout_sec: 120
         retry: 0
 
-      - id: step_4_check_progress
-        name: "步骤4：查看查找进度"
-        description: "观察左侧边栏中的全文查找进度。"
+      - id: "step_4_check_progress"
+        name: "Verify Progress Panel"
+        description: "Confirm that the Find Full Text progress UI is visible."
         action:
-          - "查看左侧边栏进度状态"
+          - "Observe the left panel and verify that progress is visible."
         actions: null
         images:
           step_image: null
           result_image: "./test_images/step4.png"
-        element_text: null
-        expected_result: "左侧边栏显示查找进度"
+        expected_result: "Find Full Text"
+        on_success: "done"
         timeout_sec: 120
         retry: 0
 
-      - id: done
-        name: "完成"
-        description: "当进度已显示，说明系统正在查找全文。"
+      - id: "done"
+        name: "Done"
+        description: "The workflow has successfully reached the progress state."
         action:
-          - "等待查找完成或继续其他操作"
+          - "Wait for EndNote to continue processing."
         actions: null
         images:
           step_image: null
           result_image: null
-        element_text: null
-        expected_result: "查找流程进入后台运行"
-        timeout_sec: 120
+        timeout_sec: 30
         retry: 0

@@ -32,6 +32,17 @@ def _as_optional_int(value: Any) -> Optional[int]:
         return None
 
 
+def _as_optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _as_optional_bool(value: Any) -> Optional[bool]:
     if value is None:
         return None
@@ -61,6 +72,86 @@ def _parse_images(data: Any) -> Images:
         step_image=_as_optional_str(data.get("step_image")),
         result_image=_as_optional_str(data.get("result_image")),
     )
+
+
+def _parse_template_matching(data: Any) -> TemplateMatching:
+    if not isinstance(data, dict):
+        return TemplateMatching()
+
+    scales = data.get("scales")
+    parsed_scales: List[float] = []
+    if isinstance(scales, list):
+        for value in scales:
+            scale = _as_optional_float(value)
+            if scale is not None:
+                parsed_scales.append(scale)
+
+    return TemplateMatching(
+        threshold=_as_optional_float(data.get("threshold")),
+        scales=parsed_scales,
+        min_scale=_as_optional_float(data.get("min_scale")),
+        max_scale=_as_optional_float(data.get("max_scale")),
+        scale_step=_as_optional_float(data.get("scale_step")),
+    )
+
+
+def _parse_transition_condition(data: Any) -> TransitionCondition:
+    if not isinstance(data, dict):
+        return TransitionCondition()
+    return TransitionCondition(
+        status=_as_optional_str(data.get("status")),
+        matched_postcondition=_as_optional_str(data.get("matched_postcondition")),
+        result_image_matched=_as_optional_bool(data.get("result_image_matched")),
+        expected_result_matched=_as_optional_bool(data.get("expected_result_matched")),
+        text_present=_as_optional_str(data.get("text_present")),
+        text_absent=_as_optional_str(data.get("text_absent")),
+        always=_as_optional_bool(data.get("always")),
+    )
+
+
+def _parse_transitions(items: Any) -> List[Transition]:
+    if not isinstance(items, list):
+        return []
+
+    results: List[Transition] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        results.append(
+            Transition(
+                goto=_as_optional_str(item.get("goto")),
+                when=_parse_transition_condition(item.get("when")),
+                else_branch=bool(_as_optional_bool(item.get("else"))),
+                label=_as_optional_str(item.get("label")),
+            )
+        )
+    return results
+
+
+def _parse_postconditions(items: Any, ctx: str) -> List[Postcondition]:
+    if not isinstance(items, list):
+        return []
+
+    results: List[Postcondition] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        postcondition_id = _as_optional_str(item.get("id"))
+        if not postcondition_id:
+            raise InstructionParseError(
+                f"Missing required key 'id' in {ctx}.postconditions[{index}]."
+            )
+        results.append(
+            Postcondition(
+                id=postcondition_id,
+                result_image=_as_optional_str(item.get("result_image")),
+                expected_text=_as_optional_str(
+                    item.get("expected_text", item.get("expected_result"))
+                ),
+                description=_as_optional_str(item.get("description")),
+            )
+        )
+    return results
 
 
 def _as_string_list(value: Any) -> List[str]:
@@ -282,12 +373,20 @@ def _parse_step(step_data: Dict[str, Any]) -> Step:
     action = _as_action_list(step_data.get("action"))
     actions = _parse_actions(step_data.get("actions"))
     images = _parse_images(step_data.get("images"))
+    template_matching = _parse_template_matching(step_data.get("template_matching"))
     expected_result = _as_optional_str(step_data.get("expected_result"))
     element_text = _as_optional_str(step_data.get("element_text"))
-    timeout_sec = step_data.get("timeout_sec")
+    on_success = _as_optional_str(step_data.get("on_success"))
+    on_failure = _as_optional_str(step_data.get("on_failure"))
+    postconditions = _parse_postconditions(
+        step_data.get("postconditions"),
+        f"step '{step_id}'",
+    )
+    transitions = _parse_transitions(step_data.get("transitions"))
+    timeout_sec = _as_optional_float(step_data.get("timeout_sec"))
     pre_processing_delay_millisec = _as_optional_int(step_data.get("pre_processing_delay_millisec"))
     post_processing_delay_millisec = _as_optional_int(step_data.get("post_processing_delay_millisec"))
-    retry = step_data.get("retry")
+    retry = _as_optional_int(step_data.get("retry"))
 
     known_keys = {
         "id",
@@ -296,10 +395,15 @@ def _parse_step(step_data: Dict[str, Any]) -> Step:
         "action",
         "actions",
         "images",
+        "template_matching",
         "expected_result",
         "timeout_sec",
         "retry",
         "element_text",
+        "on_success",
+        "on_failure",
+        "postconditions",
+        "transitions",
         "pre_processing_delay_millisec",
         "post_processing_delay_millisec",
     }
@@ -312,8 +416,13 @@ def _parse_step(step_data: Dict[str, Any]) -> Step:
         action=action,
         actions=actions,
         images=images,
+        template_matching=template_matching,
         expected_result=expected_result,
         element_text=element_text,
+        on_success=on_success,
+        on_failure=on_failure,
+        postconditions=postconditions,
+        transitions=transitions,
         timeout_sec=timeout_sec,
         retry=retry,
         extra=extra,
@@ -358,7 +467,11 @@ def parse_instruction(data: Dict[str, Any]) -> YamlInstruction:
 
     name = str(_require(data, "name", "root"))
     metadata = _parse_metadata(_require(data, "metadata", "root"))
-    on_section = _require(data, "on", "root")
+    on_section = data.get("on")
+    if on_section is None and True in data:
+        on_section = data[True]
+    if on_section is None:
+        raise InstructionParseError("Missing required key 'on' in root.")
     if not isinstance(on_section, dict):
         raise InstructionParseError("Expected 'on' to be an object in root.")
 
@@ -379,7 +492,8 @@ def load_instruction(path: str | Path) -> YamlInstruction:
     instruction_path = Path(path)
     with instruction_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
-    return parse_instruction(raw)
+    instruction = parse_instruction(raw)
+    return resolve_instruction_paths(instruction, instruction_path.parent)
 
 
 __all__ = [
