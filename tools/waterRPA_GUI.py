@@ -1,3 +1,6 @@
+# 引用自 rpa_gui.py，进行了重构和功能增强，新增了自动布局、流程箭头、日志输出等功能，并与核心逻辑和线程进行了更好的集成。
+# @see https://github.com/unfiled0/waterRPA
+
 import sys
 import os
 import json
