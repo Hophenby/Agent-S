@@ -1,0 +1,45 @@
+{
+    "start_node": "1",
+    "nodes": [
+        {
+            "node_id": "1",
+            "type": 1.0,
+            "value": "D:/agents/Agent-S/tools/test_flow/img (1).png",
+            "timeout_second": 0.0,
+            "next": "2",
+            "fallback_next": "1"
+        },
+        {
+            "node_id": "2",
+            "type": 7.0,
+            "value": "ctral+a",
+            "timeout_second": 0.0,
+            "next": "3",
+            "fallback_next": "1"
+        },
+        {
+            "node_id": "3",
+            "type": 1.0,
+            "value": "D:/agents/Agent-S/tools/test_flow/img (2).png",
+            "timeout_second": 0.0,
+            "next": "4",
+            "fallback_next": "1"
+        },
+        {
+            "node_id": "4",
+            "type": 1.0,
+            "value": "D:/agents/Agent-S/tools/test_flow/img (3).png",
+            "timeout_second": 0.0,
+            "next": "5",
+            "fallback_next": ""
+        },
+        {
+            "node_id": "5",
+            "type": 1.0,
+            "value": "D:/agents/Agent-S/tools/test_flow/img (4).png",
+            "timeout_second": 0.0,
+            "next": "",
+            "fallback_next": ""
+        }
+    ]
+}
